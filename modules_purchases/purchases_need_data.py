@@ -4,6 +4,7 @@ from .purchases_report_data import load_excel, load_stocks  # type: ignore
 
 import os
 import json
+import logging
 import time
 from typing import Dict, List, Tuple, Optional
 

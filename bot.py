@@ -18,6 +18,9 @@ from handlers import router as handlers_router
 from routers.start import start_router
 from routers.notifications import notifications_router
 from routers.warehouse import warehouse_router
+from routers.finance import finance_router
+from routers.operations import prices_router
+from routers.marketing import marketing_router
 from routers.fallback import fallback_router
 
 log = logging.getLogger("seller-bot")
@@ -27,6 +30,9 @@ async def setup_bot_commands(bot: Bot) -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Главное меню"),
+            BotCommand(command="finance", description="Финансы"),
+            BotCommand(command="prices", description="Цены"),
+            BotCommand(command="marketing", description="Маркетинг"),
             BotCommand(command="units", description="Посмотреть перечень отслеживаемых юнитов"),
             BotCommand(command="method", description="Выбрать метод расчета прогноза продаж"),
             BotCommand(command="warehouse", description="Выбрать метод расчета потребности"),
@@ -57,6 +63,9 @@ async def main():
     dp.include_router(start_router)
     dp.include_router(warehouse_router)
     dp.include_router(notifications_router)
+    dp.include_router(finance_router)
+    dp.include_router(prices_router)
+    dp.include_router(marketing_router)
     dp.include_router(handlers_router)
     
     # Fallback должен быть последним

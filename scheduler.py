@@ -1,9 +1,5 @@
 # scheduler.py
-from modules_sales.sales_forecast import (
-    forecast_text,
-    _fetch_series as _fc_fetch_series,
-    _forecast_next as _fc_forecast_next,
-)
+from modules_sales.sales_forecast import forecast_text
 from modules_sales.sales_facts_store import (
     facts_text,
     get_alias_for_sku,
