@@ -47,7 +47,7 @@ from modules_sales.sales_forecast import (
     get_forecast_method,  # ← текущий код метода
     ES_ALPHA,  # ← для короткой подписи ES в клавиатуре
     _fetch_series_from_api as _fc_fetch_series,  # для Факт/План по SKU
-    _forecast_next as _fc_forecast_next,  # для Плана-30 по SKU
+    calculate_forecast as _fc_forecast_next,  # для Плана-30 по SKU
 )
 from modules_sales.sales_traffic import traffic_text
 from modules_sales.sales_report import list_skus, sales_report_text

@@ -10,6 +10,7 @@ from modules_sales.services import (
     get_forecast_method_title,
     fetch_series_from_api as _fetch_series_from_api, # алиас для внутренней совместимости
     ES_ALPHA,
+    calculate_forecast,
 )
 from modules_sales.views import forecast_text
 
