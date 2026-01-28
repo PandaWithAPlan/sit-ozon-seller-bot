@@ -21,6 +21,7 @@ from routers.warehouse import warehouse_router
 from routers.finance import finance_router
 from routers.operations import prices_router
 from routers.marketing import marketing_router
+from routers.errors import global_error_handler
 from routers.fallback import fallback_router
 
 log = logging.getLogger("seller-bot")
@@ -74,6 +75,9 @@ async def main():
     # 5. Запуск
     await setup_bot_commands(bot)
     await scheduler_start(bot)
+
+    # Глобальный обработчик ошибок (на уровне диспетчера)
+    dp.errors.register(global_error_handler)
 
     log.info("Bot is starting polling...")
     try:
