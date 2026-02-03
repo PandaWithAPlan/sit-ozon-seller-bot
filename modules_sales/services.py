@@ -3,7 +3,6 @@ import logging
 import asyncio
 import hashlib
 import json
-import time
 import random
 import datetime as dt
 from typing import Dict, List, Tuple, Any, Optional
@@ -80,7 +79,7 @@ def set_forecast_method(code: str) -> str:
     avail = {c for c, _ in list_forecast_methods()}
     if code not in avail:
         return _label_for(get_forecast_method())
-    
+
     mgr = SalesCache.get_forecast_prefs_manager()
     mgr.update_key("method", code)
     return _label_for(code)
@@ -105,18 +104,18 @@ def _cache_key(payload: dict) -> str:
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-def _sleep_with_backoff(attempt: int, retry_after_header: Optional[str]) -> None:
+async def _sleep_with_backoff(attempt: int, retry_after_header: Optional[str]) -> None:
     if retry_after_header:
         try:
             pause = float(retry_after_header)
         except Exception:
             pause = None
         if pause is not None:
-            time.sleep(min(pause, SALES_API_MAX_PAUSE))
+            await asyncio.sleep(min(pause, SALES_API_MAX_PAUSE))
             return
     base = min(SALES_API_BASE_PAUSE * (2 ** max(0, attempt - 1)), SALES_API_MAX_PAUSE)
     jitter = base * random.uniform(0.0, SALES_API_JITTER)
-    time.sleep(base + jitter)
+    await asyncio.sleep(base + jitter)
 
 
 async def _post_analytics(payload: dict) -> dict:
@@ -135,20 +134,20 @@ async def _post_analytics(payload: dict) -> dict:
             try:
                 async with session.post(OZON_API_URL, headers=_headers(), json=payload) as r:
                     if r.status == 429:
-                        _sleep_with_backoff(attempt, r.headers.get("Retry-After"))
+                        await _sleep_with_backoff(attempt, r.headers.get("Retry-After"))
                         continue
                     r.raise_for_status()
                     js = await r.json()
-                    
+
                     # LRU cache update
                     if len(_HTTP_CACHE) >= _HTTP_CACHE_MAX:
                          # С удалением случайного или первого попавшегося для простоты (dict order preserved in Py3.7+)
-                        _HTTP_CACHE.pop(next(iter(_HTTP_CACHE))) 
+                        _HTTP_CACHE.pop(next(iter(_HTTP_CACHE)))
                     _HTTP_CACHE[key] = js
                     return js
             except Exception as e:
                 log.warning(f"API attempt {attempt} failed: {e}")
-                _sleep_with_backoff(attempt, None)
+                await _sleep_with_backoff(attempt, None)
                 continue
 
     return {"result": {"data": []}}
@@ -200,17 +199,17 @@ async def fetch_series_from_api(days_back: int) -> Dict[int, List[Tuple[dt.date,
             for d in dims:
                 val = d.get("id") or d.get("value")
                 if str(val).isdigit(): sku = int(val)
-                else: 
+                else:
                     try: day = dt.datetime.strptime(str(val), "%Y-%m-%d").date()
                     except: pass
-            
+
             if sku is None or day is None:
                 continue
 
             metrics = row.get("metrics") or []
             units = float(metrics[0]) if len(metrics) > 0 else 0.0
             rev = float(metrics[1]) if len(metrics) > 1 else 0.0
-            
+
             series.setdefault(sku, []).append((day, units, rev))
 
         if len(rows) < limit:
@@ -253,13 +252,13 @@ async def fetch_avg_price(days_back: int = 30) -> Dict[int, float]:
             if dims:
                 val = dims[0].get("id") or dims[0].get("value")
                 if str(val).isdigit(): sku = int(val)
-            
+
             if sku is None: continue
-            
+
             metrics = row.get("metrics") or []
             u = float(metrics[0]) if len(metrics) > 0 else 0.0
             r = float(metrics[1]) if len(metrics) > 1 else 0.0
-            
+
             u_sum[sku] = u_sum.get(sku, 0.0) + u
             r_sum[sku] = r_sum.get(sku, 0.0) + r
 
@@ -296,7 +295,7 @@ def calculate_forecast(series: List[Tuple[dt.date, float, float]], horizon: int)
     if not series: return 0.0, 0.0
     u = [x[1] for x in series]
     r = [x[2] for x in series]
-    
+
     method = get_forecast_method()
     if method == "es":
         lvl_u = _es(u, ES_ALPHA)
@@ -309,5 +308,5 @@ def calculate_forecast(series: List[Tuple[dt.date, float, float]], horizon: int)
             except: pass
         lvl_u = _ma(u, days)
         lvl_r = _ma(r, days)
-        
+
     return lvl_u * horizon, lvl_r * horizon
