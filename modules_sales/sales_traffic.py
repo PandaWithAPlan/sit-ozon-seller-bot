@@ -280,7 +280,7 @@ def _collect_traffic_matrix(
                 di = (dim or {}).get("id")
                 if isinstance(di, str):
                     try:
-                        dt.datetime.strptime(di, "%Y-%m-%d")
+                        dt.date.fromisoformat(di)
                         d_str = di
                         break
                     except Exception:
@@ -289,7 +289,7 @@ def _collect_traffic_matrix(
             continue
 
         try:
-            d = dt.datetime.strptime(d_str, "%Y-%m-%d").date()
+            d = dt.date.fromisoformat(d_str)
         except Exception:
             continue
 
