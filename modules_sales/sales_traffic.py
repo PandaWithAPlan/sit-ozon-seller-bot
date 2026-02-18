@@ -7,7 +7,7 @@ import time
 import datetime as dt
 from typing import Dict, List, Tuple, Any
 
-import requests
+import aiohttp
 from dotenv import load_dotenv
 
 # ── базовые пути / env по ТЗ 5.1 ─────────────────────────────────────────────
@@ -166,7 +166,7 @@ def _payload_traffic(date_from: str, date_to: str) -> Dict[str, Any]:
     return p
 
 
-def _try_fetch(payload: dict, tag: str) -> dict | None:
+async def _try_fetch(payload: dict, tag: str) -> dict | None:
     """С учётом дросселя и мягкой обработки 429/403/400."""
     global _LAST_TRAFFIC_CALL
 
@@ -175,30 +175,32 @@ def _try_fetch(payload: dict, tag: str) -> dict | None:
         return None
 
     try:
-        r = requests.post(OZON_API_URL, headers=_headers(), json=payload, timeout=30)
-        if r.status_code in (429, 403, 400):
-            body = r.text[:240].replace("\n", " ")
-            print(f"[traffic] HTTP fetch failed ({tag}): {r.status_code} {body}")
-            return None
-        r.raise_for_status()
-        _LAST_TRAFFIC_CALL = time.time()
-        return r.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(OZON_API_URL, headers=_headers(), json=payload, timeout=30) as r:
+                if r.status in (429, 403, 400):
+                    text = await r.text()
+                    body = text[:240].replace("\n", " ")
+                    print(f"[traffic] HTTP fetch failed ({tag}): {r.status} {body}")
+                    return None
+                r.raise_for_status()
+                _LAST_TRAFFIC_CALL = time.time()
+                return await r.json()
     except Exception as e:
         print(f"[traffic] HTTP fetch failed ({tag}): {e}")
         return None
 
 
-def _fetch_traffic(date_from: str, date_to: str) -> dict | None:
+async def _fetch_traffic(date_from: str, date_to: str) -> dict | None:
     """Пробуем: 1) с фильтрами  2) без фильтров (потом вручную отфильтруем)."""
     # с фильтрами
     p = _payload_traffic(date_from, date_to)
-    js = _try_fetch(p, "sku+day")
+    js = await _try_fetch(p, "sku+day")
     if js and (js.get("result") or js.get("data")):
         return js
 
     # без фильтров
     p.pop("filters", None)
-    js = _try_fetch(p, "sku+day/nofilter")
+    js = await _try_fetch(p, "sku+day/nofilter")
     if js and (js.get("result") or js.get("data")):
         return js
 
@@ -208,7 +210,7 @@ def _fetch_traffic(date_from: str, date_to: str) -> dict | None:
 # -------- сбор матрицы: {sku: {date: (views, clicks, sessions, units)}}
 
 
-def _collect_traffic_matrix(
+async def _collect_traffic_matrix(
     days: int,
 ) -> Dict[int, Dict[dt.date, Tuple[float, float, float, float]]]:
     end = dt.date.today()
@@ -218,7 +220,7 @@ def _collect_traffic_matrix(
 
     allowed = _allowed_set()
 
-    js = _fetch_traffic(date_from, date_to)
+    js = await _fetch_traffic(date_from, date_to)
     matrix: Dict[int, Dict[dt.date, Tuple[float, float, float, float]]] = {}
 
     def _push(sku: int, d: dt.date, v: float, c: float, s: float, u: float) -> None:
@@ -367,13 +369,13 @@ def _period_label(days: int) -> str:
     return f"Последние {days} дней"
 
 
-def traffic_text(period_days: int, metric: str = "ctr") -> str:
+async def traffic_text(period_days: int, metric: str = "ctr") -> str:
     """metric: 'ctr' | 'cvr'"""
     metric = (metric or "ctr").lower()
     head_metric = {"ctr": "КЛИКАБЕЛЬНОСТЬ", "cvr": "КОНВЕРСИЯ"}.get(metric, "КЛИКАБЕЛЬНОСТЬ")
 
     # буфер 30 дней, чтобы любые периоды считались из одной матрицы
-    matrix = _collect_traffic_matrix(max(int(period_days) if period_days else 1, 30))
+    matrix = await _collect_traffic_matrix(max(int(period_days) if period_days else 1, 30))
     agg = _aggregate_for_period(matrix, int(period_days))
 
     lines: List[str] = []

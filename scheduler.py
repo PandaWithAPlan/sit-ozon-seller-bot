@@ -830,11 +830,14 @@ async def _notice_fact_avgcheck_yday(bot: Bot):
 
 
 # 4–5. Конверсия и Кликабельность (без «vs 30д»)
-def _traffic_metric_text(metric: str) -> Optional[str]:
+async def _traffic_metric_text(metric: str) -> Optional[str]:
     if _TRAFFIC_TEXT_FN:
         for kwargs in (dict(period_days=1, metric=metric), dict(metric=metric), dict()):
             try:
-                txt = _TRAFFIC_TEXT_FN(**kwargs)  # type: ignore
+                if asyncio.iscoroutinefunction(_TRAFFIC_TEXT_FN):
+                    txt = await _TRAFFIC_TEXT_FN(**kwargs)
+                else:
+                    txt = _TRAFFIC_TEXT_FN(**kwargs)  # type: ignore
                 if txt and txt.strip():
                     txt = _strip_vs_suffix(txt)
                     if metric == "ctr":
@@ -850,7 +853,10 @@ def _traffic_metric_text(metric: str) -> Optional[str]:
             dict(),
         ):
             try:
-                txt = _CONV_TEXT_FN(**kwargs)  # type: ignore
+                if asyncio.iscoroutinefunction(_CONV_TEXT_FN):
+                    txt = await _CONV_TEXT_FN(**kwargs)
+                else:
+                    txt = _CONV_TEXT_FN(**kwargs)  # type: ignore
                 if txt and txt.strip():
                     return _strip_vs_suffix(txt)
             except TypeError:
@@ -863,7 +869,10 @@ def _traffic_metric_text(metric: str) -> Optional[str]:
             dict(),
         ):
             try:
-                txt = _CTR_TEXT_FN(**kwargs)  # type: ignore
+                if asyncio.iscoroutinefunction(_CTR_TEXT_FN):
+                    txt = await _CTR_TEXT_FN(**kwargs)
+                else:
+                    txt = _CTR_TEXT_FN(**kwargs)  # type: ignore
                 if txt and txt.strip():
                     txt = _strip_vs_suffix(txt)
                     txt = re.sub(r"\bCTR\b", "Кликабельность", txt, flags=re.IGNORECASE)
@@ -876,7 +885,7 @@ def _traffic_metric_text(metric: str) -> Optional[str]:
 
 
 async def _notice_conversion_yday(bot: Bot):
-    txt = _traffic_metric_text("cvr")
+    txt = await _traffic_metric_text("cvr")
     if not txt:
         await _send_text(
             bot,
@@ -889,7 +898,7 @@ async def _notice_conversion_yday(bot: Bot):
 
 
 async def _notice_ctr_yday(bot: Bot):
-    txt = _traffic_metric_text("ctr")
+    txt = await _traffic_metric_text("ctr")
     if not txt:
         await _send_text(
             bot,
