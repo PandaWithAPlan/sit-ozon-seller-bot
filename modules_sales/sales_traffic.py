@@ -1,11 +1,12 @@
 from __future__ import annotations
-from modules_common.paths import ensure_dirs, DATA_DIR, CACHE_SALES
+from modules_common.paths import ensure_dirs, CACHE_SALES
 
 import os
 import json
 import time
+import asyncio
 import datetime as dt
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 
 import aiohttp
 from dotenv import load_dotenv
@@ -103,7 +104,7 @@ def _headers() -> Dict[str, str]:
 TRAFFIC_CACHE_FILE = os.path.join(CACHE_SALES, "traffic_cache.json")
 
 
-def _read_cache() -> dict:
+def _read_cache_sync() -> dict:
     if not os.path.exists(TRAFFIC_CACHE_FILE):
         return {}
     try:
@@ -113,12 +114,20 @@ def _read_cache() -> dict:
         return {}
 
 
-def _write_cache(payload: dict) -> None:
+async def _read_cache() -> dict:
+    return await asyncio.to_thread(_read_cache_sync)
+
+
+def _write_cache_sync(payload: dict) -> None:
     try:
         with open(TRAFFIC_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False)
     except Exception:
         pass
+
+
+async def _write_cache(payload: dict) -> None:
+    await asyncio.to_thread(_write_cache_sync, payload)
 
 
 # -------- подготовка payload
@@ -166,7 +175,9 @@ def _payload_traffic(date_from: str, date_to: str) -> Dict[str, Any]:
     return p
 
 
-async def _try_fetch(payload: dict, tag: str) -> dict | None:
+async def _try_fetch(
+    payload: dict, tag: str, session: Optional[aiohttp.ClientSession] = None
+) -> dict | None:
     """С учётом дросселя и мягкой обработки 429/403/400."""
     global _LAST_TRAFFIC_CALL
 
@@ -175,34 +186,46 @@ async def _try_fetch(payload: dict, tag: str) -> dict | None:
         return None
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(OZON_API_URL, headers=_headers(), json=payload, timeout=30) as r:
-                if r.status in (429, 403, 400):
-                    text = await r.text()
-                    body = text[:240].replace("\n", " ")
-                    print(f"[traffic] HTTP fetch failed ({tag}): {r.status} {body}")
-                    return None
-                r.raise_for_status()
-                _LAST_TRAFFIC_CALL = time.time()
-                return await r.json()
+        if session:
+            return await _do_fetch(session, payload, tag)
+        else:
+            async with aiohttp.ClientSession() as temp_session:
+                return await _do_fetch(temp_session, payload, tag)
     except Exception as e:
         print(f"[traffic] HTTP fetch failed ({tag}): {e}")
         return None
 
 
+async def _do_fetch(session: aiohttp.ClientSession, payload: dict, tag: str) -> dict | None:
+    global _LAST_TRAFFIC_CALL
+    async with session.post(
+        OZON_API_URL, headers=_headers(), json=payload, timeout=30
+    ) as r:
+        if r.status in (429, 403, 400):
+            text = await r.text()
+            body = text[:240].replace("\n", " ")
+            print(f"[traffic] HTTP fetch failed ({tag}): {r.status} {body}")
+            return None
+        r.raise_for_status()
+        _LAST_TRAFFIC_CALL = time.time()
+        return await r.json()
+
+
 async def _fetch_traffic(date_from: str, date_to: str) -> dict | None:
     """Пробуем: 1) с фильтрами  2) без фильтров (потом вручную отфильтруем)."""
-    # с фильтрами
     p = _payload_traffic(date_from, date_to)
-    js = await _try_fetch(p, "sku+day")
-    if js and (js.get("result") or js.get("data")):
-        return js
 
-    # без фильтров
-    p.pop("filters", None)
-    js = await _try_fetch(p, "sku+day/nofilter")
-    if js and (js.get("result") or js.get("data")):
-        return js
+    async with aiohttp.ClientSession() as session:
+        # с фильтрами
+        js = await _try_fetch(p, "sku+day", session=session)
+        if js and (js.get("result") or js.get("data")):
+            return js
+
+        # без фильтров
+        p.pop("filters", None)
+        js = await _try_fetch(p, "sku+day/nofilter", session=session)
+        if js and (js.get("result") or js.get("data")):
+            return js
 
     return None
 
@@ -232,7 +255,7 @@ async def _collect_traffic_matrix(
 
     if not js:
         # оффлайн из кэша (строго по allowed)
-        cached = _read_cache()
+        cached = await _read_cache()
         for sku_s, rows in (cached.get("rows") or {}).items():
             try:
                 sku = int(sku_s)
@@ -317,7 +340,7 @@ async def _collect_traffic_matrix(
                 {"date": d.strftime("%Y-%m-%d"), "views": v, "clicks": c, "sessions": s, "units": u}
             )
 
-    _write_cache({"rows": to_cache})
+    await _write_cache({"rows": to_cache})
     return matrix
 
 
