@@ -585,7 +585,7 @@ async def on_facts_period(cb: CallbackQuery, state: FSMContext):
     _, _, period, metric = cb.data.split(":")
     period_days = int(period)
     text = (
-        traffic_text(period_days=period_days, metric=metric)
+        await traffic_text(period_days=period_days, metric=metric)
         if metric in {"ctr", "cvr"}
         else facts_text(period_days=period_days, metric=metric)
     )

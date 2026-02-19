@@ -39,12 +39,16 @@ MOCK_RESPONSE_DATA = {
     }
 }
 
+@pytest.mark.asyncio
 @patch("modules_sales.sales_traffic._fetch_traffic")
 @patch("modules_sales.sales_traffic._allowed_set")
 @patch("modules_sales.sales_traffic._read_cache") # ensure cache is ignored
-def test_collect_traffic_matrix_parsing(mock_read_cache, mock_allowed_set, mock_fetch_traffic):
+async def test_collect_traffic_matrix_parsing(mock_read_cache, mock_allowed_set, mock_fetch_traffic):
     # Setup mocks
-    mock_fetch_traffic.return_value = MOCK_RESPONSE_DATA
+    async def async_return(*args, **kwargs):
+        return MOCK_RESPONSE_DATA
+
+    mock_fetch_traffic.side_effect = async_return
     mock_allowed_set.return_value = {111, 222, 333, 444} # Allow all SKUs in test data
     mock_read_cache.return_value = {}
 
@@ -64,9 +68,9 @@ def test_collect_traffic_matrix_parsing(mock_read_cache, mock_allowed_set, mock_
     MOCK_RESPONSE_DATA["result"]["data"][0]["date"] = d1
     MOCK_RESPONSE_DATA["result"]["data"][1]["dimensions"][1]["id"] = d2
 
-    mock_fetch_traffic.return_value = MOCK_RESPONSE_DATA
+    # mock_fetch_traffic side_effect is set
 
-    matrix = sales_traffic._collect_traffic_matrix(days=30)
+    matrix = await sales_traffic._collect_traffic_matrix(days=30)
 
     # Verify results
 
