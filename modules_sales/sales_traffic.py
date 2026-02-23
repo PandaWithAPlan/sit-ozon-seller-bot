@@ -186,37 +186,42 @@ async def _try_fetch(
         return None
 
     try:
+        timeout = aiohttp.ClientTimeout(total=30)
         if session:
-            return await _do_fetch(session, payload, tag)
+            # Используем переданную сессию
+            async with session.post(
+                OZON_API_URL, headers=_headers(), json=payload, timeout=timeout
+            ) as r:
+                return await _handle_response(r, tag)
         else:
-            async with aiohttp.ClientSession() as temp_session:
-                return await _do_fetch(temp_session, payload, tag)
+            # Создаем временную сессию (fallback)
+            async with aiohttp.ClientSession() as tmp_session:
+                async with tmp_session.post(
+                    OZON_API_URL, headers=_headers(), json=payload, timeout=timeout
+                ) as r:
+                    return await _handle_response(r, tag)
     except Exception as e:
         print(f"[traffic] HTTP fetch failed ({tag}): {e}")
         return None
 
 
-async def _do_fetch(session: aiohttp.ClientSession, payload: dict, tag: str) -> dict | None:
+async def _handle_response(r: aiohttp.ClientResponse, tag: str) -> dict | None:
     global _LAST_TRAFFIC_CALL
-    async with session.post(
-        OZON_API_URL, headers=_headers(), json=payload, timeout=30
-    ) as r:
-        if r.status in (429, 403, 400):
-            text = await r.text()
-            body = text[:240].replace("\n", " ")
-            print(f"[traffic] HTTP fetch failed ({tag}): {r.status} {body}")
-            return None
-        r.raise_for_status()
-        _LAST_TRAFFIC_CALL = time.time()
-        return await r.json()
+    if r.status in (429, 403, 400):
+        text = await r.text()
+        body = text[:240].replace("\n", " ")
+        print(f"[traffic] HTTP fetch failed ({tag}): {r.status} {body}")
+        return None
+    r.raise_for_status()
+    _LAST_TRAFFIC_CALL = time.time()
+    return await r.json()
 
 
 async def _fetch_traffic(date_from: str, date_to: str) -> dict | None:
     """Пробуем: 1) с фильтрами  2) без фильтров (потом вручную отфильтруем)."""
-    p = _payload_traffic(date_from, date_to)
-
     async with aiohttp.ClientSession() as session:
         # с фильтрами
+        p = _payload_traffic(date_from, date_to)
         js = await _try_fetch(p, "sku+day", session=session)
         if js and (js.get("result") or js.get("data")):
             return js

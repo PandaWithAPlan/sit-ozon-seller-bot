@@ -1,5 +1,6 @@
+import asyncio
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from modules_sales import sales_traffic
 
 @pytest.mark.asyncio
@@ -35,7 +36,6 @@ async def test_fetch_traffic_session_reuse():
             assert mock_try_fetch.call_count >= 1
 
             # Verify the session argument was passed
-            # _try_fetch(payload, tag, session=session)
             call_args = mock_try_fetch.call_args
             kwargs = call_args.kwargs
             assert "session" in kwargs
@@ -47,23 +47,38 @@ async def test_try_fetch_uses_session():
     payload = {"foo": "bar"}
     tag = "test"
 
-    # Mock _do_fetch because _try_fetch calls it
-    with patch("modules_sales.sales_traffic._do_fetch", new_callable=AsyncMock) as mock_do_fetch:
-        mock_do_fetch.return_value = {"result": "ok"}
+    # Mock _handle_response instead of _do_fetch
+    with patch("modules_sales.sales_traffic._handle_response", new_callable=AsyncMock) as mock_handle:
+        mock_handle.return_value = {"result": "ok"}
 
         # Scenario 1: session provided
-        mock_session = AsyncMock()
-        await sales_traffic._try_fetch(payload, tag, session=mock_session)
-        mock_do_fetch.assert_called_with(mock_session, payload, tag)
+        mock_session = MagicMock() # post is synchronous returning CM
+        mock_resp_cm = MagicMock()
+        mock_resp = AsyncMock()
 
-        mock_do_fetch.reset_mock()
+        # Async context manager setup
+        mock_resp_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp_cm.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session.post.return_value = mock_resp_cm
+
+        await sales_traffic._try_fetch(payload, tag, session=mock_session)
+
+        # Verify session.post called
+        mock_session.post.assert_called_once()
+        mock_handle.assert_called_with(mock_resp, tag)
+
+        mock_session.post.reset_mock()
+        mock_handle.reset_mock()
 
         # Scenario 2: session not provided
-        # We need to mock ClientSession context manager
-        mock_temp_session = AsyncMock()
-        mock_temp_session.__aenter__.return_value = mock_temp_session
-        mock_temp_session.__aexit__.return_value = None
+        mock_temp_session = MagicMock() # temp session context manager wrapper
+        mock_temp_session.__aenter__ = AsyncMock(return_value=mock_temp_session)
+        mock_temp_session.__aexit__ = AsyncMock(return_value=None)
+
+        mock_temp_session.post.return_value = mock_resp_cm
 
         with patch("aiohttp.ClientSession", return_value=mock_temp_session):
             await sales_traffic._try_fetch(payload, tag)
-            mock_do_fetch.assert_called_with(mock_temp_session, payload, tag)
+            mock_temp_session.post.assert_called_once()
+            mock_handle.assert_called_with(mock_resp, tag)
