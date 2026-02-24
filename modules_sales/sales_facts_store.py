@@ -203,7 +203,7 @@ def _now_stamp() -> str:
     Returns:
         Строка в формате "ДД.ММ.ГГГГ ЧЧ:ММ"
     """
-    # FIX: латинская M для минут
+    # Note: using Latin M for minutes
     return dt.datetime.now().strftime("%d.%m.%Y %H:%M")
 
 
