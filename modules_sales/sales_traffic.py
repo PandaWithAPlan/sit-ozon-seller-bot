@@ -1,5 +1,5 @@
 from __future__ import annotations
-from modules_common.paths import ensure_dirs, DATA_DIR, CACHE_SALES
+from modules_common.paths import ensure_dirs, CACHE_SALES
 
 import os
 import json
