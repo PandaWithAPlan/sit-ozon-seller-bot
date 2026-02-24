@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import json
 import datetime as dt
+import asyncio
 from typing import Dict, Tuple, List, Optional
 from collections import defaultdict
 
@@ -877,7 +878,7 @@ def list_enabled_clusters_for_report() -> List[Tuple[int, str, float, int]]:
 # ── Мост к статистике: SKU по складу/кластеру ───────────────────────────────
 
 
-def stats_sku_for_warehouse(
+async def stats_sku_for_warehouse(
     warehouse_id: int, period_days: Optional[int] = None
 ) -> List[Tuple[int, str, Dict[str, float]]]:
     """
@@ -888,8 +889,8 @@ def stats_sku_for_warehouse(
         # ✅ используем фасад statistics (без опечаток)
         from modules_shipments.shipments_leadtime_stats import get_lead_stats_sku_for_warehouse, get_stat_period  # type: ignore
 
-        period = int(period_days or get_stat_period() or 90)
-        tuples = get_lead_stats_sku_for_warehouse(int(warehouse_id), period) or []
+        period = int(period_days or await get_stat_period() or 90)
+        tuples = await get_lead_stats_sku_for_warehouse(int(warehouse_id), period) or []
     except Exception:
         tuples = []
 
@@ -899,7 +900,7 @@ def stats_sku_for_warehouse(
         sku_i = int(sku)
         if WATCH_SET and sku_i not in WATCH_SET:
             continue
-        alias = (get_alias_for_sku(sku_i) or "").strip() or str(sku_i)
+        alias = (await asyncio.to_thread(get_alias_for_sku, sku_i) or "").strip() or str(sku_i)
         items.append((sku_i, alias, dict(m or {})))
 
     if WATCH_ORDER:
@@ -910,7 +911,7 @@ def stats_sku_for_warehouse(
     return items
 
 
-def stats_sku_for_cluster(
+async def stats_sku_for_cluster(
     cluster_id: int, period_days: Optional[int] = None
 ) -> List[Tuple[int, str, Dict[str, float]]]:
     """
@@ -921,8 +922,8 @@ def stats_sku_for_cluster(
         # ✅ используем фасад statistics (без опечаток)
         from modules_shipments.shipments_leadtime_stats import get_lead_stats_sku_for_cluster, get_stat_period  # type: ignore
 
-        period = int(period_days or get_stat_period() or 90)
-        tuples = get_lead_stats_sku_for_cluster(int(cluster_id), period) or []
+        period = int(period_days or await get_stat_period() or 90)
+        tuples = await get_lead_stats_sku_for_cluster(int(cluster_id), period) or []
     except Exception:
         tuples = []
 
@@ -931,7 +932,7 @@ def stats_sku_for_cluster(
         sku_i = int(sku)
         if WATCH_SET and sku_i not in WATCH_SET:
             continue
-        alias = (get_alias_for_sku(sku_i) or "").strip() or str(sku_i)
+        alias = (await asyncio.to_thread(get_alias_for_sku, sku_i) or "").strip() or str(sku_i)
         items.append((sku_i, alias, dict(m or {})))
 
     if WATCH_ORDER:
@@ -992,7 +993,7 @@ def manual_view_by_cluster() -> List[Tuple[int, str, float, int]]:
     return out
 
 
-def manual_view_by_sku() -> List[Tuple[int, str, float, int]]:
+async def manual_view_by_sku() -> List[Tuple[int, str, float, int]]:
     """
     Сводка по SKU строится ТОЛЬКО по подписанным складам; применяем
     фильтрацию и порядок по WATCH_SKU; имена — из ALIAS.
@@ -1004,7 +1005,7 @@ def manual_view_by_sku() -> List[Tuple[int, str, float, int]]:
     try:
         from modules_shipments.shipments_leadtime_stats import get_stat_period  # type: ignore
 
-        period = int(get_stat_period() or 90)
+        period = int(await get_stat_period() or 90)
     except Exception:
         period = 90
 
@@ -1012,7 +1013,7 @@ def manual_view_by_sku() -> List[Tuple[int, str, float, int]]:
     sum_n: Dict[int, float] = defaultdict(float)
 
     for wid in enabled_follow:
-        tuples = stats_sku_for_warehouse(int(wid), period_days=period)
+        tuples = await stats_sku_for_warehouse(int(wid), period_days=period)
         for sku, _alias, m in tuples or []:
             n = float((m or {}).get("n", 0) or 0)
             avg = float((m or {}).get("avg", 0.0) or 0.0)
@@ -1026,7 +1027,7 @@ def manual_view_by_sku() -> List[Tuple[int, str, float, int]]:
         if total_n <= 0:
             continue
         avg = sum_weighted[sku] / total_n
-        alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+        alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
         if WATCH_SET and int(sku) not in WATCH_SET:
             continue
         out.append((int(sku), alias, float(avg), int(total_n)))
@@ -1057,19 +1058,21 @@ def delete_lead_record(wid: int) -> None:
 # ── Ручное обновление имён (кнопка «🔄 Обновить имена») ──────────────────────
 
 
-def refresh_warehouse_names() -> dict:
+async def refresh_warehouse_names() -> dict:
     """
     Пробрасывает ручное обновление имён в data‑модуль (если доступен).
     Фолбэк: обновляет кэш по именам из stocks без доп. источников.
     """
     if _data_refresh_names:
         try:
-            return _data_refresh_names() or {"updated": 0, "total": 0}
+            # assuming _data_refresh_names is sync, wrap it
+            return await asyncio.to_thread(_data_refresh_names) or {"updated": 0, "total": 0}
         except Exception:
             pass
 
     # Фолбэк — быстрое улучшение имен только по stocks (без кластеров/потребности)
-    rows = _get_stocks(view="warehouse", force=True) or []
+    # wrap sync _get_stocks
+    rows = await asyncio.to_thread(_get_stocks, view="warehouse", force=True) or []
     cache = load_lead_cache()
     ws = cache.setdefault("warehouses", {})
     updated = 0
@@ -1107,15 +1110,15 @@ def _format_cluster_lines(limit: int = 30) -> List[str]:
     return lines
 
 
-def _format_sku_lines(limit: int = 50) -> List[str]:
-    rows = manual_view_by_sku()  # (sku, alias, avg_days, n)
+async def _format_sku_lines(limit: int = 50) -> List[str]:
+    rows = await manual_view_by_sku()  # (sku, alias, avg_days, n)
     lines: List[str] = []
     for _, alias, avg, n in rows[: max(1, int(limit))]:
         lines.append(f"• {alias}: {avg:.1f} дн (n={int(n)})")
     return lines
 
 
-def leadtime_stats_text(*, view: str = "sku", limit: int = 50, **kwargs) -> str:
+async def leadtime_stats_text(*, view: str = "sku", limit: int = 50, **kwargs) -> str:
     """
     Готовый текстовый отчёт по срокам:
       view: "sku" (по умолчанию) | "cluster" | "warehouse"
@@ -1145,7 +1148,7 @@ def leadtime_stats_text(*, view: str = "sku", limit: int = 50, **kwargs) -> str:
                 parts.append(f"• {wname}: {float(days):.1f} дн")
         body = parts
     else:
-        sku_lines = _format_sku_lines(limit=limit)
+        sku_lines = await _format_sku_lines(limit=limit)
         if sku_lines:
             parts.append("SKU (средние по подписанным складам):")
             parts.extend(sku_lines)
@@ -1158,28 +1161,28 @@ def leadtime_stats_text(*, view: str = "sku", limit: int = 50, **kwargs) -> str:
 # Совместимые алиасы (на случай разных интеграций)
 
 
-def delivery_stats_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def delivery_stats_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def lead_stats_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def lead_stats_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def stats_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def stats_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def report_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def report_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def leadtime_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def leadtime_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def leadtime_report_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def leadtime_report_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
 __all__ = [
