@@ -82,7 +82,7 @@ except Exception:
     def manual_view_by_cluster() -> List[Tuple[int, str, float, int]]:
         return []
 
-    def manual_view_by_sku() -> List[Tuple[int, str, float, int]]:
+    async def manual_view_by_sku() -> List[Tuple[int, str, float, int]]:
         return []
 
     def list_enabled_warehouses_for_report() -> List[Tuple[int, str, float]]:
@@ -91,13 +91,13 @@ except Exception:
     def list_enabled_clusters_for_report() -> List[Tuple[int, str, float, int]]:
         return []
 
-    def stats_sku_for_warehouse(_wid: int, _p: int | None = None):
+    async def stats_sku_for_warehouse(_wid: int, _p: int | None = None):
         return []
 
-    def stats_sku_for_cluster(_cid: int, _p: int | None = None):
+    async def stats_sku_for_cluster(_cid: int, _p: int | None = None):
         return []
 
-    def refresh_warehouse_names() -> dict:
+    async def refresh_warehouse_names() -> dict:
         return {"updated": 0, "total": 0}
 
 
@@ -106,10 +106,10 @@ try:
     from modules_shipments.shipments_leadtime_stats import get_stat_period, rebuild_events_from_states  # type: ignore
 except Exception:
 
-    def get_stat_period() -> int:
+    async def get_stat_period() -> int:
         return 90
 
-    def rebuild_events_from_states() -> int:
+    async def rebuild_events_from_states() -> int:
         return 0
 
 
@@ -119,7 +119,7 @@ try:
     from modules_shipments.shipments_leadtime_stats_data import apply_stats_to_leads_for_followers  # type: ignore
 except Exception:
 
-    def apply_stats_to_leads_for_followers() -> int:
+    async def apply_stats_to_leads_for_followers() -> int:
         return 0
 
 
@@ -309,7 +309,7 @@ async def lead_update_names(cb: CallbackQuery, state: FSMContext):
         page = 0
     stats = {}
     try:
-        stats = refresh_warehouse_names() or {}
+        stats = await refresh_warehouse_names() or {}
     except Exception:
         stats = {}
 
@@ -410,20 +410,20 @@ async def lead_follow_on(cb: CallbackQuery, state: FSMContext):
     parts = cb.data.split(":")
     wid = int(parts[3])
     page = int(parts[4]) if len(parts) >= 5 else 0
-    period = get_stat_period() or 90
+    period = await get_stat_period() or 90
     try:
         enable_follow_stats(wid, period=period, metric="avg")
 
         # 1) пробуем сразу подтянуть значения из статистики
-        updated = int(apply_stats_to_leads_for_followers() or 0)
+        updated = int(await apply_stats_to_leads_for_followers() or 0)
 
         # 2) если нет событий/обновлений — регенерируем события из кэша состояний и пробуем ещё раз
         if updated == 0:
             try:
-                _ = rebuild_events_from_states()
+                _ = await rebuild_events_from_states()
             except Exception:
                 _ = 0
-            updated = int(apply_stats_to_leads_for_followers() or 0)
+            updated = int(await apply_stats_to_leads_for_followers() or 0)
 
         if updated > 0:
             note = f"📈 Подписка включена (P={period}). Значение обновлено из статистики."
@@ -680,7 +680,7 @@ async def lead_report(cb: CallbackQuery):
         return
 
     title = "🔢 <b>По SKU</b>"
-    rows = manual_view_by_sku()  # [(sku, alias, avg, n)]
+    rows = await manual_view_by_sku()  # [(sku, alias, avg, n)]
     slice_rows, _total, pages, page = _slice(rows, page, REPORT_PAGE_SIZE)
     body = (
         "\n".join(f"🔹 {alias} — ∅={avg:.2f} дн" for _sku, alias, avg, _n in slice_rows)
