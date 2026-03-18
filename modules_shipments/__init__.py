@@ -138,7 +138,7 @@ except Exception:
 
 # ⏰ Lead Days (ручной ввод сроков доставки)
 try:
-    from .leadtime_settings import (  # type: ignore
+    from .shipments_leadtime import (  # type: ignore
         LEAD_EDIT_PAGE_SIZE,
         get_progress,
         list_warehouses_page,
@@ -146,8 +146,10 @@ try:
         save_lead_days,
         reset_lead_days,
         delete_lead_record,
-        derive_cluster_lead_map,
     )
+
+    def derive_cluster_lead_map(*_a, **_k):  # type: ignore
+        return {}
 except Exception:
     LEAD_EDIT_PAGE_SIZE = 20  # type: ignore
 
@@ -285,7 +287,7 @@ def leadtime_dump_xlsx(_filepath: str):
 
 def leadtime_required_clusters():
     try:
-        from .leadtime_settings import get_warehouse_cluster_map, get_all_leads  # type: ignore
+        from .shipments_leadtime import get_warehouse_cluster_map, get_all_leads  # type: ignore
 
         wid_to_cluster = get_warehouse_cluster_map()
         leads = get_all_leads()
