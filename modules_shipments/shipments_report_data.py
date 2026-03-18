@@ -324,7 +324,7 @@ def get_current_warehouses() -> Dict[int, str]:
     return out
 
 def get_warehouse_cluster_map() -> Dict[int, int]:
-    """Сопоставление склад→кластер (используется в leadtime_settings и calc_distribution)."""
+    """Сопоставление склад→кластер (используется в shipments_leadtime и calc_distribution)."""
     rows = fetch_stocks_view(view="warehouse") or []
     mapping: Dict[int, int] = {}
     for r in rows:
