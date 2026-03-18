@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple, Any
 import datetime as dt
+import asyncio
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Основной путь — тонкий прокси в data_stats
@@ -47,40 +48,40 @@ except Exception:
 # ─────────────────────────────────────────────────────────────────────────────
 if not _HAS_IMPL:
 
-    def _get_stat_period_impl() -> int:
+    async def _get_stat_period_impl() -> int:
         return 180
 
-    def _save_stat_period_impl(_period: int) -> None:
+    async def _save_stat_period_impl(_period: int) -> None:
         return
 
-    def _set_alloc_impl(_flag: bool) -> None:
+    async def _set_alloc_impl(_flag: bool) -> None:
         return
 
-    def _rebuild_impl() -> int:
+    async def _rebuild_impl() -> int:
         return 0
 
-    def _invalidate_stats_impl() -> None:
+    async def _invalidate_stats_impl() -> None:
         return
 
-    def _summary_impl(_period_days: int | None = None) -> Dict[str, float]:
+    async def _summary_impl(_period_days: int | None = None) -> Dict[str, float]:
         return {"avg": 0.0, "p50": 0.0, "p90": 0.0, "n": 0.0}
 
-    def _by_wh_impl(_period_days: int | None = None):
+    async def _by_wh_impl(_period_days: int | None = None):
         return []
 
-    def _by_cluster_impl(_period_days: int | None = None):
+    async def _by_cluster_impl(_period_days: int | None = None):
         return []
 
-    def _by_sku_impl(_period_days: int | None = None):
+    async def _by_sku_impl(_period_days: int | None = None):
         return []
 
-    def _sku_for_wh_impl(_warehouse_id: int, _period_days: int | None = None):
+    async def _sku_for_wh_impl(_warehouse_id: int, _period_days: int | None = None):
         return []
 
-    def _sku_for_cluster_impl(_cluster_id: int, _period_days: int | None = None):
+    async def _sku_for_cluster_impl(_cluster_id: int, _period_days: int | None = None):
         return []
 
-    def _alloc_flag_impl() -> bool:
+    async def _alloc_flag_impl() -> bool:
         return True
 
 
@@ -89,62 +90,62 @@ if not _HAS_IMPL:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def get_stat_period() -> int:
-    return _get_stat_period_impl()
+async def get_stat_period() -> int:
+    return await _get_stat_period_impl()
 
 
-def save_stat_period(period: int) -> None:
-    _save_stat_period_impl(period)
+async def save_stat_period(period: int) -> None:
+    await _save_stat_period_impl(period)
 
 
-def set_lead_allocation_flag(flag: bool) -> None:
-    _set_alloc_impl(flag)
+async def set_lead_allocation_flag(flag: bool) -> None:
+    await _set_alloc_impl(flag)
 
 
-def rebuild_events_from_states() -> int:
+async def rebuild_events_from_states() -> int:
     """Полная регенерация событий из states с учётом текущих настроек."""
-    return _rebuild_impl()
+    return await _rebuild_impl()
 
 
-def invalidate_stats_cache() -> None:
+async def invalidate_stats_cache() -> None:
     """Сбросить кэш статистики (пересчитается при следующем чтении)."""
-    _invalidate_stats_impl()
+    await _invalidate_stats_impl()
 
 
-def get_lead_stats_summary(period_days: int | None = None) -> Dict[str, float]:
-    return _summary_impl(period_days)
+async def get_lead_stats_summary(period_days: int | None = None) -> Dict[str, float]:
+    return await _summary_impl(period_days)
 
 
-def get_lead_stats_by_warehouse(
+async def get_lead_stats_by_warehouse(
     period_days: int | None = None,
 ) -> List[Tuple[int, str, Dict[str, float]]]:
-    return _by_wh_impl(period_days)
+    return await _by_wh_impl(period_days)
 
 
-def get_lead_stats_by_cluster(
+async def get_lead_stats_by_cluster(
     period_days: int | None = None,
 ) -> List[Tuple[int, str, Dict[str, float]]]:
-    return _by_cluster_impl(period_days)
+    return await _by_cluster_impl(period_days)
 
 
-def get_lead_stats_by_sku(
+async def get_lead_stats_by_sku(
     period_days: int | None = None,
 ) -> List[Tuple[int, str, Dict[str, float]]]:
-    return _by_sku_impl(period_days)
+    return await _by_sku_impl(period_days)
 
 
-def get_lead_stats_sku_for_warehouse(
+async def get_lead_stats_sku_for_warehouse(
     warehouse_id: int, period_days: int | None = None
 ) -> List[Tuple[int, str, Dict[str, float]]]:
     """Дрилл-даун: агрегаты по SKU внутри конкретного склада."""
-    return _sku_for_wh_impl(warehouse_id, period_days)
+    return await _sku_for_wh_impl(warehouse_id, period_days)
 
 
-def get_lead_stats_sku_for_cluster(
+async def get_lead_stats_sku_for_cluster(
     cluster_id: int, period_days: int | None = None
 ) -> List[Tuple[int, str, Dict[str, float]]]:
     """Дрилл-даун: агрегаты по SKU внутри конкретного кластера."""
-    return _sku_for_cluster_impl(cluster_id, period_days)
+    return await _sku_for_cluster_impl(cluster_id, period_days)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -152,9 +153,9 @@ def get_lead_stats_sku_for_cluster(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _alloc_phrase() -> str:
+async def _alloc_phrase() -> str:
     try:
-        return "учитывать вес партии" if bool(_alloc_flag_impl()) else "не учитывать вес партии"
+        return "учитывать вес партии" if await _alloc_flag_impl() else "не учитывать вес партии"
     except Exception:
         return "учитывать вес партии"
 
@@ -171,12 +172,12 @@ def _fmt_days(x: float) -> str:
         return "0.00"
 
 
-def _header(period: int) -> List[str]:
+async def _header(period: int) -> List[str]:
     return [
         "📄 Показатели сроков доставки — Σ∅/SKU",
         f"⏱ Обновлено: {_now_str()}",
         "",
-        f"⚙️ Период: {int(period)} дн. • Распределение по SKU: {_alloc_phrase()}",
+        f"⚙️ Период: {int(period)} дн. • Распределение по SKU: {await _alloc_phrase()}",
     ]
 
 
@@ -218,7 +219,7 @@ def _footer(total_avg: float, sku_count: int) -> List[str]:
     return ["", f"📊 ИТОГО — ∅={_fmt_days(total_avg)} дн • SKU: {int(sku_count)}"]
 
 
-def leadtime_stats_text(**kwargs) -> str:
+async def leadtime_stats_text(**kwargs) -> str:
     """
     Универсальный рендер «Сроки доставки» для уведомлений.
     По умолчанию — агрегирование по SKU.
@@ -248,47 +249,48 @@ def leadtime_stats_text(**kwargs) -> str:
                     break
             except Exception:
                 pass
-    period = period or get_stat_period()
+    period = period or await get_stat_period()
 
-    parts: List[str] = _header(period)
+    parts: List[str] = await _header(period)
 
     if group == "sku":
-        rows = get_lead_stats_by_sku(period) or []
+        rows = await get_lead_stats_by_sku(period) or []
         body = _format_sku_rows(rows)
         total_avg = _weighted_total(rows)
         tail = _footer(total_avg, len(rows))
         return "\n".join(parts + body + tail)
 
     if group == "warehouse":
-        rows = get_lead_stats_by_warehouse(period) or []
+        rows = await get_lead_stats_by_warehouse(period) or []
         out: List[str] = ["🏭 По складам:"]
         if not rows:
             out.append("ℹ️ Нет событий/поставок по складам за выбранный период.")
         else:
             for wid, wname, m in rows:
                 # человеко‑читаемое имя склада (фолбэк на локальный кэш базы сроков)
-                show_name = _wh_title(int(wid)) or (wname or f"wh:{wid}")
+                # _wh_title is sync, wrap it
+                show_name = await asyncio.to_thread(_wh_title, int(wid)) or (wname or f"wh:{wid}")
                 out.append(f"🔹 {show_name}: {_fmt_days((m or {}).get('avg', 0.0))} дн")
-        summary = get_lead_stats_summary(period) or {}
+        summary = await get_lead_stats_summary(period) or {}
         total_avg = float(summary.get("avg", 0.0) or 0.0)
         tail = _footer(total_avg, len(rows))
         return "\n".join(parts + out + tail)
 
     if group == "cluster":
-        rows = get_lead_stats_by_cluster(period) or []
+        rows = await get_lead_stats_by_cluster(period) or []
         out: List[str] = ["🏢 По кластерам:"]
         if not rows:
             out.append("ℹ️ Нет событий/поставок по кластерам за выбранный период.")
         else:
             for _cid, cname, m in rows:
                 out.append(f"🔹 {cname}: {_fmt_days((m or {}).get('avg', 0.0))} дн")
-        summary = get_lead_stats_summary(period) or {}
+        summary = await get_lead_stats_summary(period) or {}
         total_avg = float(summary.get("avg", 0.0) or 0.0)
         tail = _footer(total_avg, len(rows))
         return "\n".join(parts + out + tail)
 
     # запасной вариант
-    rows = get_lead_stats_by_sku(period) or []
+    rows = await get_lead_stats_by_sku(period) or []
     body = _format_sku_rows(rows)
     total_avg = _weighted_total(rows)
     tail = _footer(total_avg, len(rows))
@@ -298,28 +300,28 @@ def leadtime_stats_text(**kwargs) -> str:
 # Алиасы на тот же рендер — на случай разных интеграций
 
 
-def delivery_stats_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def delivery_stats_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def lead_stats_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def lead_stats_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def stats_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def stats_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def report_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def report_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def leadtime_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def leadtime_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
-def leadtime_report_text(**kwargs) -> str:
-    return leadtime_stats_text(**kwargs)
+async def leadtime_report_text(**kwargs) -> str:
+    return await leadtime_stats_text(**kwargs)
 
 
 __all__ = [

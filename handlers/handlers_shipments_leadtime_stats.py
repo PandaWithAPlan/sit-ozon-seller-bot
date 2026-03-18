@@ -33,31 +33,31 @@ except Exception:
     _FACade_OK = False
 
     # мягкие заглушки
-    def get_lead_stats_summary(*_a, **_k):
+    async def get_lead_stats_summary(*_a, **_k):
         return {}
 
-    def get_lead_stats_by_sku(*_a, **_k):
+    async def get_lead_stats_by_sku(*_a, **_k):
         return []
 
-    def get_lead_stats_by_cluster(*_a, **_k):
+    async def get_lead_stats_by_cluster(*_a, **_k):
         return []
 
-    def get_lead_stats_by_warehouse(*_a, **_k):
+    async def get_lead_stats_by_warehouse(*_a, **_k):
         return []
 
-    def get_lead_stats_sku_for_warehouse(*_a, **_k):
+    async def get_lead_stats_sku_for_warehouse(*_a, **_k):
         return []
 
-    def get_lead_stats_sku_for_cluster(*_a, **_k):
+    async def get_lead_stats_sku_for_cluster(*_a, **_k):
         return []
 
-    def set_lead_allocation_flag(_flag: bool) -> None:
+    async def set_lead_allocation_flag(_flag: bool) -> None:
         pass
 
-    def _facade_get_stat_period() -> int:
+    async def _facade_get_stat_period() -> int:
         return 180
 
-    def invalidate_stats_cache() -> None:
+    async def invalidate_stats_cache() -> None:
         pass
 
 
@@ -66,7 +66,7 @@ try:
     from modules_shipments.shipments_leadtime_stats_data import ingest_status  # type: ignore
 except Exception:
 
-    def ingest_status() -> dict:
+    async def ingest_status() -> dict:
         return {}
 
 
@@ -108,6 +108,14 @@ def _now() -> str:
     return _dt.datetime.now().strftime("%d.%m.%Y %H:%M")
 
 
+# We need sync version of _facade_get_stat_period or handle it async in _read_prefs?
+# _read_prefs is sync.
+# _facade_get_stat_period is async now.
+# However, _read_prefs just needs a default.
+# I'll use hardcoded default here to avoid making _read_prefs async which might complicate things
+# or rely on json read.
+DEFAULT_PERIOD = 180
+
 def _read_prefs() -> Dict[str, Any]:
     try:
         if os.path.exists(_PREFS_PATH):
@@ -117,10 +125,10 @@ def _read_prefs() -> Dict[str, Any]:
             d = {}
     except Exception:
         d = {}
-    default_period = int(_facade_get_stat_period())
-    period = int(d.get("period", default_period))
+
+    period = int(d.get("period", DEFAULT_PERIOD))
     if period not in PERIOD_CHOICES:
-        period = default_period
+        period = DEFAULT_PERIOD
     alloc = bool(d.get("allocate_by_qty", True))
     autotrack_enabled = bool(d.get("autotrack_enabled", True))
     autotrack_interval_min = int(
@@ -198,7 +206,7 @@ async def _autotrack_loop():
         try:
             from modules_shipments.shipments_leadtime_stats_data import ingest_tick  # type: ignore
 
-            await asyncio.to_thread(ingest_tick, pages)
+            await ingest_tick(pages)
         except Exception:
             pass
 
@@ -250,9 +258,9 @@ def _weighted_total(rows: List[Tuple[int, str, Dict[str, float]]]) -> Tuple[floa
 # Имя кластера для заголовка по id (берём из статистики текущего периода)
 
 
-def _cluster_name_from_stats(period: int, cid: int) -> str:
+async def _cluster_name_from_stats(period: int, cid: int) -> str:
     try:
-        for _cid, cname, _m in get_lead_stats_by_cluster(period) or []:
+        for _cid, cname, _m in await get_lead_stats_by_cluster(period) or []:
             if int(_cid) == int(cid):
                 return str(cname)
     except Exception:
@@ -307,7 +315,7 @@ async def lts_home(cb: CallbackQuery):
     _ensure_autotrack_started()
     prefs = _read_prefs()
     try:
-        summary = await asyncio.to_thread(get_lead_stats_summary, prefs["period"])
+        summary = await get_lead_stats_summary(prefs["period"])
     except Exception:
         summary = {}
     text = (
@@ -330,7 +338,7 @@ async def lts_home(cb: CallbackQuery):
 async def lts_info(cb: CallbackQuery):
     await _ack(cb)
     _ensure_autotrack_started()
-    st = ingest_status() or {}
+    st = await ingest_status() or {}
     prefs = _read_prefs()
     text = (
         "📦 <b>Информация по заявкам</b>\n"
@@ -363,7 +371,7 @@ async def lts_info(cb: CallbackQuery):
 async def lts_view_wh(cb: CallbackQuery):
     await _ack(cb)
     prefs = _read_prefs()
-    rows = await asyncio.to_thread(get_lead_stats_by_warehouse, prefs["period"])
+    rows = await get_lead_stats_by_warehouse(prefs["period"])
     header = (
         "📄 <b>Сроки доставки — по складам</b>\n"
         f"⏱ Обновлено: {_now()}\n"
@@ -399,7 +407,7 @@ async def lts_view_wh(cb: CallbackQuery):
 async def lts_view_cluster(cb: CallbackQuery):
     await _ack(cb)
     prefs = _read_prefs()
-    rows = await asyncio.to_thread(get_lead_stats_by_cluster, prefs["period"])
+    rows = await get_lead_stats_by_cluster(prefs["period"])
     header = (
         "📄 <b>Сроки доставки — по кластерам</b>\n"
         f"⏱ Обновлено: {_now()}\n"
@@ -481,13 +489,13 @@ def _sku_report_kb(context: str, page: int, pages: int) -> InlineKeyboardMarkup:
 
 async def _fetch_sku_rows(context: str, period: int) -> List[Tuple[int, str, Dict[str, float]]]:
     if context == "all":
-        return await asyncio.to_thread(get_lead_stats_by_sku, period)
+        return await get_lead_stats_by_sku(period)
     if context.startswith("wh:"):
         wid = int(context.split(":")[1])
-        return await asyncio.to_thread(get_lead_stats_sku_for_warehouse, wid, period)
+        return await get_lead_stats_sku_for_warehouse(wid, period)
     if context.startswith("cl:"):
         cid = int(context.split(":")[1])
-        return await asyncio.to_thread(get_lead_stats_sku_for_cluster, cid, period)
+        return await get_lead_stats_sku_for_cluster(cid, period)
     return []
 
 
@@ -520,7 +528,7 @@ async def lts_sku_report_paginated(cb: CallbackQuery):
     elif ctx.startswith("cl:"):
         cid = int(ctx.split(":")[1])
         title = f"📄 Показатели сроков доставки — кластер {
-            _cluster_name_from_stats(
+            await _cluster_name_from_stats(
                 prefs['period'], cid)}"
     else:
         title = "📄 Показатели сроков доставки — Σ∅/SKU"
@@ -599,12 +607,13 @@ async def lts_set_period(cb: CallbackQuery):
     try:
         period = int(cb.data.split(":")[-1])
     except Exception:
-        period = _facade_get_stat_period()
+        # _facade_get_stat_period is async
+        period = await _facade_get_stat_period()
     if period not in PERIOD_CHOICES:
-        period = _facade_get_stat_period()
+        period = await _facade_get_stat_period()
     _write_prefs(period=period)
     try:
-        await asyncio.to_thread(invalidate_stats_cache)
+        await invalidate_stats_cache()
     except Exception:
         pass
     await _safe_edit(cb, _settings_text(), parse_mode="HTML", reply_markup=_settings_kb())
@@ -618,7 +627,7 @@ async def lts_set_alloc(cb: CallbackQuery):
     ok_note = "\n\n♻️ Применили новое правило распределения и обновили события."
     err_note = "\n\n⚠️ Не удалось применить новое правило (проверьте логи)."
     try:
-        await asyncio.to_thread(set_lead_allocation_flag, bool(turn_on))
+        await set_lead_allocation_flag(bool(turn_on))
         _write_prefs(allocate_by_qty=turn_on)
         note = ok_note
     except Exception:

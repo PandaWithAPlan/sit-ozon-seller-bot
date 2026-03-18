@@ -117,14 +117,22 @@ def _order_key_for_sku(sku: int, alias: str = "") -> Tuple[int, str]:
 # ── tiny json utils ──────────────────────────────────────────────────────────
 
 
-def _read_json(path: str) -> dict:
-    """Читает JSON файл с логированием."""
+def _read_json_sync(path: str) -> dict:
+    """Читает JSON файл с логированием (синхронно)."""
     return safe_read_json(path)
 
 
-def _write_json(path: str, payload: dict) -> None:
-    """Записывает JSON файл с логированием."""
+def _write_json_sync(path: str, payload: dict) -> None:
+    """Записывает JSON файл с логированием (синхронно)."""
     safe_write_json(path, payload)
+
+
+async def _read_json(path: str) -> dict:
+    return await asyncio.to_thread(_read_json_sync, path)
+
+
+async def _write_json(path: str, payload: dict) -> None:
+    await asyncio.to_thread(_write_json_sync, path, payload)
 
 
 # ── time helpers ────────────────────────────────────────────────────────────
@@ -154,16 +162,16 @@ def _iso_ge(a: str, b: str) -> bool:
     return str(a) >= str(b)
 
 
-def _events_saved_at() -> str:
+async def _events_saved_at() -> str:
     try:
-        d = _read_json(EVENTS_CACHE_PATH)
+        d = await _read_json(EVENTS_CACHE_PATH)
         return str(d.get("saved_at") or "")
     except Exception:
         return ""
 
 
-def _is_events_empty() -> bool:
-    d = _read_json(EVENTS_CACHE_PATH)
+async def _is_events_empty() -> bool:
+    d = await _read_json(EVENTS_CACHE_PATH)
     return not bool(d.get("rows"))
 
 
@@ -174,8 +182,8 @@ def _utc_now_iso() -> str:
 # ── prefs (period + allocation flag) ─────────────────────────────────────────
 
 
-def _load_prefs() -> dict:
-    d = _read_json(LEAD_STATS_PREFS_PATH)
+async def _load_prefs() -> dict:
+    d = await _read_json(LEAD_STATS_PREFS_PATH)
     period = int(d.get("period", LEAD_STAT_DAYS_DEFAULT))
     if period not in LEAD_STAT_PERIODS:
         period = LEAD_STAT_DAYS_DEFAULT
@@ -183,42 +191,44 @@ def _load_prefs() -> dict:
     return {"period": period, "allocate_by_qty": alloc}
 
 
-def get_stat_period() -> int:
-    return int(_load_prefs().get("period", LEAD_STAT_DAYS_DEFAULT))
+async def get_stat_period() -> int:
+    prefs = await _load_prefs()
+    return int(prefs.get("period", LEAD_STAT_DAYS_DEFAULT))
 
 
-def save_stat_period(period: int) -> None:
+async def save_stat_period(period: int) -> None:
     if period not in LEAD_STAT_PERIODS:
         return
-    cur = _load_prefs()
+    cur = await _load_prefs()
     cur["period"] = int(period)
-    _write_json(LEAD_STATS_PREFS_PATH, cur)
+    await _write_json(LEAD_STATS_PREFS_PATH, cur)
 
 
-def get_lead_allocation_flag() -> bool:
-    return bool(_load_prefs().get("allocate_by_qty", True))
+async def get_lead_allocation_flag() -> bool:
+    prefs = await _load_prefs()
+    return bool(prefs.get("allocate_by_qty", True))
 
 
 # ── переключение аллокации ───────────────────────────────────────────────────
 
 
-def set_lead_allocation_flag(flag: bool) -> None:
+async def set_lead_allocation_flag(flag: bool) -> None:
     """
     Обновляет флаг «учитывать вес партии», после чего:
         • полностью пересобирает события из states с новым правилом,
         • инвалидирует кэш статистики.
     """
-    cur = _load_prefs()
+    cur = await _load_prefs()
     cur["allocate_by_qty"] = bool(flag)
-    _write_json(LEAD_STATS_PREFS_PATH, cur)
+    await _write_json(LEAD_STATS_PREFS_PATH, cur)
     try:
-        _write_json(EVENTS_CACHE_PATH, {"saved_at": _utc_now_iso(), "rows": [], "version": 2})
-        _emit_phase_b_events_from_states(_utc_now_iso())
-        _write_json(STATS_CACHE_PATH, {})
+        await _write_json(EVENTS_CACHE_PATH, {"saved_at": _utc_now_iso(), "rows": [], "version": 2})
+        await _emit_phase_b_events_from_states(_utc_now_iso())
+        await _write_json(STATS_CACHE_PATH, {})
     except Exception:
         # хотя бы сбросим кэш статистики
         try:
-            _write_json(STATS_CACHE_PATH, {})
+            await _write_json(STATS_CACHE_PATH, {})
         except Exception:
             pass
 
@@ -237,8 +247,8 @@ def _is_fresh(saved_iso: str, ttl_hours: int) -> bool:
 # ── materialize & filter ─────────────────────────────────────────────────────
 
 
-def _materialize_events(period_days: int) -> List[dict]:
-    d = _read_json(EVENTS_CACHE_PATH)
+async def _materialize_events(period_days: int) -> List[dict]:
+    d = await _read_json(EVENTS_CACHE_PATH)
     rows = d.get("rows", []) if isinstance(d, dict) else []
     if not rows:
         return []
@@ -519,13 +529,13 @@ def _has_end_state(states: Dict[str, str]) -> bool:
 # ── status cache (фаза B) ────────────────────────────────────────────────────
 
 
-def _states_load() -> dict:
-    d = _read_json(STATES_CACHE_PATH)
+async def _states_load() -> dict:
+    d = await _read_json(STATES_CACHE_PATH)
     return d if isinstance(d, dict) else {}
 
 
-def _states_save(payload: dict) -> None:
-    _write_json(STATES_CACHE_PATH, payload or {})
+async def _states_save(payload: dict) -> None:
+    await _write_json(STATES_CACHE_PATH, payload or {})
 
 
 def _ensure_list_unique_int(lst) -> List[int]:
@@ -540,11 +550,12 @@ def _ensure_list_unique_int(lst) -> List[int]:
     return out
 
 
-def _bundle_items(bundle_ids: List[str]) -> Dict[str, List[Tuple[int, float]]]:
+async def _bundle_items(bundle_ids: List[str]) -> Dict[str, List[Tuple[int, float]]]:
     """Чтение состава заявки {bundle_id: [(sku, qty), ...]} с постраничностью."""
     out: Dict[str, List[Tuple[int, float]]] = {}
-    if not bundle_ids or not requests:
+    if not bundle_ids:
         return out
+
     todo = [str(bid).strip() for bid in bundle_ids if str(bid).strip()]
     if len(todo) > LEAD_BUNDLE_MAX_PER_RUN:
         todo = todo[:LEAD_BUNDLE_MAX_PER_RUN]
@@ -563,13 +574,13 @@ def _bundle_items(bundle_ids: List[str]) -> Dict[str, List[Tuple[int, float]]]:
             while attempt < 3:
                 attempt += 1
                 total_tries += 1
-                js, resp = _post_json(
+                js, resp = await _post_json(
                     "https://api-seller.ozon.ru/v1/supply-order/bundle",
                     payload,
                     timeout=LEAD_HTTP_TIMEOUT,
                 )
-                if resp is not None and getattr(resp, "status_code", 200) == 429:
-                    _respect_rate_limit_sleep(resp)
+                if resp is not None and getattr(resp, "status", 200) == 429:
+                    await _respect_rate_limit_sleep(resp)
                     continue
                 items = _js_pick(js, "items")
                 items = items if isinstance(items, list) else []
@@ -586,16 +597,16 @@ def _bundle_items(bundle_ids: List[str]) -> Dict[str, List[Tuple[int, float]]]:
                         continue
                 has_next = bool(js.get("has_next"))
                 last_id = js.get("last_id") if has_next else None
-                time.sleep(0.06)
+                await asyncio.sleep(0.06)
                 break
-            time.sleep(0.03)
+            await asyncio.sleep(0.03)
         if bucket:
             out[bid] = bucket
-        time.sleep(0.03)
+        await asyncio.sleep(0.03)
     return out
 
 
-def _states_upsert_from_get(orders: List[dict], now_iso: Optional[str] = None) -> None:
+async def _states_upsert_from_get(orders: List[dict], now_iso: Optional[str] = None) -> None:
     """
     Обновляем кэш состояний по списку orders из /v3/supply-order/get.
 
@@ -608,7 +619,7 @@ def _states_upsert_from_get(orders: List[dict], now_iso: Optional[str] = None) -
     if not orders:
         return
     now_iso = now_iso or _utc_now_iso()
-    cache = _states_load()
+    cache = await _states_load()
 
     order_to_bundles: Dict[str, List[str]] = {}
 
@@ -713,7 +724,7 @@ def _states_upsert_from_get(orders: List[dict], now_iso: Optional[str] = None) -
     if order_to_bundles:
         for sid, bundle_ids in order_to_bundles.items():
             try:
-                bmap = _bundle_items(bundle_ids or [])
+                bmap = await _bundle_items(bundle_ids or [])
                 sku_items: List[Tuple[int, float]] = []
                 for bid in bundle_ids or []:
                     for pair in bmap.get(bid) or []:
@@ -726,9 +737,9 @@ def _states_upsert_from_get(orders: List[dict], now_iso: Optional[str] = None) -
             except Exception:
                 continue
 
-    _states_save(cache)
+    await _states_save(cache)
     try:
-        _purge_completed_without_start()
+        await _purge_completed_without_start()
     except Exception:
         pass
 
@@ -736,10 +747,10 @@ def _states_upsert_from_get(orders: List[dict], now_iso: Optional[str] = None) -
 # ── retention ────────────────────────────────────────────────────────────────
 
 
-def _retain_events(now_utc: Optional[dt.datetime] = None) -> int:
+async def _retain_events(now_utc: Optional[dt.datetime] = None) -> int:
     now_utc = now_utc or dt.datetime.now(dt.timezone.utc)
     cutoff = now_utc - dt.timedelta(days=max(1, int(LEAD_RETENTION_DAYS)))
-    cache = _read_json(EVENTS_CACHE_PATH)
+    cache = await _read_json(EVENTS_CACHE_PATH)
     rows = cache.get("rows", []) if isinstance(cache, dict) else []
     kept: List[dict] = []
     removed = 0
@@ -753,18 +764,18 @@ def _retain_events(now_utc: Optional[dt.datetime] = None) -> int:
         except Exception:
             kept.append(e)
     if removed:
-        _write_json(EVENTS_CACHE_PATH, {"saved_at": _utc_now_iso(), "rows": kept, "version": 2})
+        await _write_json(EVENTS_CACHE_PATH, {"saved_at": _utc_now_iso(), "rows": kept, "version": 2})
         try:
-            _write_json(STATS_CACHE_PATH, {})
+            await _write_json(STATS_CACHE_PATH, {})
         except Exception:
             pass
     return removed
 
 
-def _retain_states(now_utc: Optional[dt.datetime] = None) -> int:
+async def _retain_states(now_utc: Optional[dt.datetime] = None) -> int:
     now_utc = now_utc or dt.datetime.now(dt.timezone.utc)
     cutoff = now_utc - dt.timedelta(days=max(1, int(LEAD_RETENTION_DAYS)))
-    cache = _states_load()
+    cache = await _states_load()
     removed = 0
     for sid, rec in list(cache.items()):
         try:
@@ -779,18 +790,18 @@ def _retain_states(now_utc: Optional[dt.datetime] = None) -> int:
         except Exception:
             continue
     if removed:
-        _states_save(cache)
+        await _states_save(cache)
     return removed
 
 
-def _purge_completed_without_start() -> int:
+async def _purge_completed_without_start() -> int:
     """
     Удаляет из кэша заявки, где есть «конечный» статус
     (ACCEPTANCE_AT_STORAGE_WAREHOUSE/REPORTS_CONFIRMATION_AWAITING/COMPLETED),
     но НЕТ ACCEPTED.
     Возвращает число удалённых записей.
     """
-    cache = _states_load()
+    cache = await _states_load()
     removed = 0
     for sid, rec in list(cache.items()):
         st = rec.get("states") or {}
@@ -798,7 +809,7 @@ def _purge_completed_without_start() -> int:
             cache.pop(sid, None)
             removed += 1
     if removed:
-        _states_save(cache)
+        await _states_save(cache)
     return removed
 
 
@@ -815,12 +826,12 @@ def _default_ingest_state() -> dict:
     }
 
 
-def _read_state() -> dict:
+async def _read_state() -> dict:
     """
     Безопасное чтение состояния инжеста из LEAD_INGEST_STATE_PATH.
     Возвращает словарь со всеми обязательными ключами.
     """
-    d = _read_json(LEAD_INGEST_STATE_PATH)
+    d = await _read_json(LEAD_INGEST_STATE_PATH)
     if not isinstance(d, dict):
         d = {}
     state = _default_ingest_state()
@@ -843,7 +854,7 @@ def _read_state() -> dict:
     return state
 
 
-def _write_state(payload: dict) -> None:
+async def _write_state(payload: dict) -> None:
     """
     Атомарная запись состояния инжеста в LEAD_INGEST_STATE_PATH.
     """
@@ -852,7 +863,7 @@ def _write_state(payload: dict) -> None:
         st.update(payload or {})
     except Exception:
         pass
-    _write_json(LEAD_INGEST_STATE_PATH, st)
+    await _write_json(LEAD_INGEST_STATE_PATH, st)
 
 
 def _should_force_tick(now_ts: float, st: dict, primary_bootstrap: bool) -> bool:
@@ -874,7 +885,7 @@ def _should_force_tick(now_ts: float, st: dict, primary_bootstrap: bool) -> bool
 # ── emit phase-B events from states ──────────────────────────────────────────
 
 
-def _wid_to_cluster_map() -> Dict[int, int]:
+async def _wid_to_cluster_map() -> Dict[int, int]:
     """
     Основной путь — из stocks (если доступен). Если нет — дополнительные фолбэки:
     • mapping из shipments_leadtime.get_warehouse_cluster_map()
@@ -885,7 +896,9 @@ def _wid_to_cluster_map() -> Dict[int, int]:
     try:
         from modules_shipments.shipments_data import fetch_stocks_view  # type: ignore
 
-        for r in fetch_stocks_view(view="warehouse") or []:
+        # wrap sync call
+        rows = await asyncio.to_thread(fetch_stocks_view, view="warehouse") or []
+        for r in rows:
             try:
                 wid = int(r.get("warehouse_id") or (r.get("dimensions") or [{}])[0].get("id"))
                 cid = int(
@@ -905,7 +918,8 @@ def _wid_to_cluster_map() -> Dict[int, int]:
     try:
         from .shipments_leadtime import get_warehouse_cluster_map  # type: ignore
 
-        m = get_warehouse_cluster_map() or {}
+        # wrap sync call
+        m = await asyncio.to_thread(get_warehouse_cluster_map) or {}
         for w, c in (m or {}).items():
             try:
                 wid2cid[int(w)] = int(c)
@@ -920,7 +934,8 @@ def _wid_to_cluster_map() -> Dict[int, int]:
     try:
         from .shipments_report_data import load_clusters  # type: ignore
 
-        js = load_clusters(force=False) or {}
+        # wrap sync call
+        js = await asyncio.to_thread(load_clusters, force=False) or {}
         name_by_wid: Dict[int, str] = {}
         for cl in js.get("clusters") or []:
             cname = (
@@ -944,7 +959,7 @@ def _wid_to_cluster_map() -> Dict[int, int]:
     return {}
 
 
-def _emit_phase_b_events_from_states(now_iso: Optional[str] = None) -> int:
+async def _emit_phase_b_events_from_states(now_iso: Optional[str] = None) -> int:
     """
     Для каждой заявки с ACCEPTED и «завершением»
     (ACCEPTANCE_AT_STORAGE_WAREHOUSE/REPORTS_CONFIRMATION_AWAITING/COMPLETED)
@@ -953,13 +968,13 @@ def _emit_phase_b_events_from_states(now_iso: Optional[str] = None) -> int:
       • SKU‑гранулы (sku=int) — только если успешно снят снимок sku_items.
     """
     now_iso = now_iso or _utc_now_iso()
-    states = _states_load()
+    states = await _states_load()
     if not states:
         return 0
 
-    wid2cid = _wid_to_cluster_map()
+    wid2cid = await _wid_to_cluster_map()
 
-    prev = _read_json(EVENTS_CACHE_PATH)
+    prev = await _read_json(EVENTS_CACHE_PATH)
     rows_prev = prev.get("rows", []) if isinstance(prev, dict) else []
 
     def _key(e: dict) -> Tuple[int, int, str, Optional[int]]:
@@ -1012,7 +1027,7 @@ def _emit_phase_b_events_from_states(now_iso: Optional[str] = None) -> int:
 
         has_sku_items = bool(sku_items)
         total_q = sum((float(q or 0.0) for _, q in sku_items)) if has_sku_items else 0.0
-        alloc_by_qty = get_lead_allocation_flag()
+        alloc_by_qty = await get_lead_allocation_flag()
 
         for storage_i in storage_wids:
             try:
@@ -1067,9 +1082,9 @@ def _emit_phase_b_events_from_states(now_iso: Optional[str] = None) -> int:
         return 0
 
     merged = rows_prev + new_events
-    _write_json(EVENTS_CACHE_PATH, {"saved_at": _utc_now_iso(), "rows": merged, "version": 2})
+    await _write_json(EVENTS_CACHE_PATH, {"saved_at": _utc_now_iso(), "rows": merged, "version": 2})
     try:
-        _write_json(STATS_CACHE_PATH, {})
+        await _write_json(STATS_CACHE_PATH, {})
     except Exception:
         pass
     return added
@@ -1078,17 +1093,17 @@ def _emit_phase_b_events_from_states(now_iso: Optional[str] = None) -> int:
 # ── ensure recent on read ────────────────────────────────────────────────────
 
 
-def _ensure_recent_events(period_days: int, max_pages: int) -> None:
+async def _ensure_recent_events(period_days: int, max_pages: int) -> None:
     if LEAD_DISABLE_INGEST_ON_READ:
         return
-    ev = _materialize_events(period_days)
+    ev = await _materialize_events(period_days)
     if ev:
         return
     try:
-        update_leadtime_events(
+        await update_leadtime_events(
             days=int(period_days),
             pages=max(1, int(max_pages)),
-            primary_bootstrap=_is_events_empty(),
+            primary_bootstrap=await _is_events_empty(),
         )
     except Exception as ex:
         print("[leadtime] ensure_recent_events soft-failed:", ex)
@@ -1097,22 +1112,22 @@ def _ensure_recent_events(period_days: int, max_pages: int) -> None:
 # ── stats cache helpers ──────────────────────────────────────────────────────
 
 
-def _load_stats_cache() -> dict:
-    return _read_json(STATS_CACHE_PATH)
+async def _load_stats_cache() -> dict:
+    return await _read_json(STATS_CACHE_PATH)
 
 
-def _save_stats_cache(key: str, payload: Any) -> None:
-    allc = _load_stats_cache()
+async def _save_stats_cache(key: str, payload: Any) -> None:
+    allc = await _load_stats_cache()
     if not isinstance(allc, dict):
         allc = {}
     allc[key] = {"saved_at": _utc_now_iso(), "payload": payload}
-    _write_json(STATS_CACHE_PATH, allc)
+    await _write_json(STATS_CACHE_PATH, allc)
 
 
-def _stats_key(period: int, view: str) -> str:
+async def _stats_key(period: int, view: str) -> str:
     # Флаг аллокации влияет только на "sku"
     alloc = (
-        "1" if (view == "sku" and get_lead_allocation_flag()) else ("0" if view == "sku" else "-")
+        "1" if (view == "sku" and await get_lead_allocation_flag()) else ("0" if view == "sku" else "-")
     )
     return f"P{int(period)}:{str(view)}:alloc={alloc}"
 
@@ -1156,7 +1171,7 @@ def _extract_cluster_name_from_row(r: dict) -> Tuple[Optional[int], str]:
     return cid_i, cname
 
 
-def _cluster_names_by_id() -> Dict[int, str]:
+async def _cluster_names_by_id() -> Dict[int, str]:
     """
     Собираем карту {cluster_id -> name} из доступных источников:
       • stocks(view='warehouse')
@@ -1169,7 +1184,9 @@ def _cluster_names_by_id() -> Dict[int, str]:
     try:
         from modules_shipments.shipments_data import fetch_stocks_view  # type: ignore
 
-        for r in fetch_stocks_view(view="warehouse") or []:
+        # wrap sync call
+        rows = await asyncio.to_thread(fetch_stocks_view, view="warehouse") or []
+        for r in rows:
             cid, cname = _extract_cluster_name_from_row(r)
             if cid and cname and cid not in out:
                 out[int(cid)] = str(cname)
@@ -1181,7 +1198,9 @@ def _cluster_names_by_id() -> Dict[int, str]:
         try:
             from .shipments_leadtime import _get_stocks  # type: ignore
 
-            for r in _get_stocks(view="warehouse") or []:
+            # wrap sync call
+            rows = await asyncio.to_thread(_get_stocks, view="warehouse") or []
+            for r in rows:
                 cid, cname = _extract_cluster_name_from_row(r)
                 if cid and cname and cid not in out:
                     out[int(cid)] = str(cname)
@@ -1193,7 +1212,8 @@ def _cluster_names_by_id() -> Dict[int, str]:
         try:
             from .shipments_report_data import load_clusters  # type: ignore
 
-            js = load_clusters(force=False) or {}
+            # wrap sync call
+            js = await asyncio.to_thread(load_clusters, force=False) or {}
             for cl in js.get("clusters") or []:
                 cid = cl.get("id") or cl.get("cluster_id") or cl.get("clusterId")
                 cname = (cl.get("name") or cl.get("title") or cl.get("cluster_name") or "").strip()
@@ -1211,23 +1231,23 @@ def _cluster_names_by_id() -> Dict[int, str]:
 # ── public stats ─────────────────────────────────────────────────────────────
 
 
-def get_lead_stats_summary(period_days: int | None = None) -> Dict[str, float]:
-    period = int(period_days or get_stat_period())
-    key = _stats_key(period, "summary")
-    cache_all = _load_stats_cache()
+async def get_lead_stats_summary(period_days: int | None = None) -> Dict[str, float]:
+    period = int(period_days or await get_stat_period())
+    key = await _stats_key(period, "summary")
+    cache_all = await _load_stats_cache()
     cache = cache_all.get(key) or {}
     stats_saved = str(cache.get("saved_at") or "")
-    events_saved = _events_saved_at()
+    events_saved = await _events_saved_at()
     if cache and _is_fresh(stats_saved, LEAD_STAT_TTL_HOURS) and _iso_ge(stats_saved,                                                                             events_saved):
         return cache.get("payload", {})
-    _ensure_recent_events(period, max_pages=2)
-    events = _only_completed_with_duration(_materialize_events(period))
+    await _ensure_recent_events(period, max_pages=2)
+    events = _only_completed_with_duration(await _materialize_events(period))
     # Сводка только по базовым событиям (один заказ × один склад)
     events = [e for e in events if (e.get("sku") is None or int(e.get("sku") or 0) == 0)]
     vals = [float(e["duration_days"]) for e in events]
     if not vals:
         payload = {"avg": 0.0, "p50": 0.0, "p90": 0.0, "n": 0.0}
-        _save_stats_cache(key, payload)
+        await _save_stats_cache(key, payload)
         return payload
     vals.sort()
     n = len(vals)
@@ -1237,34 +1257,35 @@ def get_lead_stats_summary(period_days: int | None = None) -> Dict[str, float]:
         "p90": _percentile(vals, 0.9),
         "n": float(n),
     }
-    _save_stats_cache(key, payload)
+    await _save_stats_cache(key, payload)
     return payload
 
 
-def get_lead_stats_by_warehouse(
+async def get_lead_stats_by_warehouse(
     period_days: int | None = None,
 ) -> List[Tuple[int, str, Dict[str, float]]]:
-    period = int(period_days or get_stat_period())
-    key = _stats_key(period, "warehouse")
-    cache_all = _load_stats_cache()
+    period = int(period_days or await get_stat_period())
+    key = await _stats_key(period, "warehouse")
+    cache_all = await _load_stats_cache()
     cache = cache_all.get(key) or {}
     stats_saved = str(cache.get("saved_at") or "")
-    events_saved = _events_saved_at()
+    events_saved = await _events_saved_at()
     if cache and _is_fresh(stats_saved, LEAD_STAT_TTL_HOURS) and _iso_ge(stats_saved,                                                                             events_saved):
         return cache.get("payload", [])
-    _ensure_recent_events(period, max_pages=2)
+    await _ensure_recent_events(period, max_pages=2)
 
-    events = _only_completed_with_duration(_materialize_events(period))
+    events = _only_completed_with_duration(await _materialize_events(period))
     # Аггрегируем по базовым событиям — одно на заказ×склад
     events = [e for e in events if (e.get("sku") is None or int(e.get("sku") or 0) == 0)]
 
     if not events:
-        _save_stats_cache(key, [])
+        await _save_stats_cache(key, [])
         return []
     try:
         from .shipments_leadtime import get_current_warehouses  # type: ignore
 
-        wid_name = get_current_warehouses()
+        # wrap sync call
+        wid_name = await asyncio.to_thread(get_current_warehouses)
     except Exception:
         wid_name = {}
     try:
@@ -1281,43 +1302,45 @@ def get_lead_stats_by_warehouse(
             wid_i = int(wid)
         except Exception:
             continue
-        title = wid_name.get(wid_i) or _wh_title_fallback(wid_i) or f"wh:{wid_i}"
+        title = wid_name.get(wid_i) or await asyncio.to_thread(_wh_title_fallback, wid_i) or f"wh:{wid_i}"
         out.append((wid_i, title, m))
     out.sort(
         key=lambda t: (-int(t[2].get("n", 0)), -float(t[2].get("avg", 0.0)), str(t[1]).lower())
     )
-    _save_stats_cache(key, out)
+    await _save_stats_cache(key, out)
     return out
 
 
-def get_lead_stats_by_cluster(
+async def get_lead_stats_by_cluster(
     period_days: int | None = None,
 ) -> List[Tuple[int, str, Dict[str, float]]]:
-    period = int(period_days or get_stat_period())
-    key = _stats_key(period, "cluster")
-    cache_all = _load_stats_cache()
+    period = int(period_days or await get_stat_period())
+    key = await _stats_key(period, "cluster")
+    cache_all = await _load_stats_cache()
     cache = cache_all.get(key) or {}
     stats_saved = str(cache.get("saved_at") or "")
-    events_saved = _events_saved_at()
+    events_saved = await _events_saved_at()
     if cache and _is_fresh(stats_saved, LEAD_STAT_TTL_HOURS) and _iso_ge(stats_saved,                                                                             events_saved):
         return cache.get("payload", [])
-    _ensure_recent_events(period, max_pages=2)
+    await _ensure_recent_events(period, max_pages=2)
 
-    events = _only_completed_with_duration(_materialize_events(period))
+    events = _only_completed_with_duration(await _materialize_events(period))
     events = [e for e in events if (e.get("sku") is None or int(e.get("sku") or 0) == 0)]
 
     if not events:
-        _save_stats_cache(key, [])
+        await _save_stats_cache(key, [])
         return []
 
     # Основной путь: агрегируем по id кластера (через map склад→кластер)
     try:
         from .shipments_leadtime import get_warehouse_cluster_map, _get_stocks  # type: ignore
 
-        wid2cid = get_warehouse_cluster_map()
+        # wrap sync call
+        wid2cid = await asyncio.to_thread(get_warehouse_cluster_map)
         cid_name: Dict[int, str] = {}
-        # пробуем достать названия из stocks leadtime
-        for r in _get_stocks(view="warehouse") or []:
+        # пробуем достать названия из stocks leadtime. wrap sync call
+        rows = await asyncio.to_thread(_get_stocks, view="warehouse") or []
+        for r in rows:
             try:
                 cid, cname = _extract_cluster_name_from_row(r)
                 if cid and cname and cid not in cid_name:
@@ -1330,7 +1353,7 @@ def get_lead_stats_by_cluster(
     # Доп. источники имён кластеров, если пусто/неполно
     if wid2cid and not cid_name:
         try:
-            cid_name = _cluster_names_by_id()
+            cid_name = await _cluster_names_by_id()
         except Exception:
             cid_name = {}
 
@@ -1349,14 +1372,15 @@ def get_lead_stats_by_cluster(
         out.sort(
             key=lambda t: (-int(t[2].get("n", 0)), -float(t[2].get("avg", 0.0)), str(t[1]).lower())
         )
-        _save_stats_cache(key, out)
+        await _save_stats_cache(key, out)
         return out
 
     # ФОЛБЭК — без wid→cid: агрегируем по названию кластера из /cluster/list
     try:
         from .shipments_report_data import load_clusters  # type: ignore
 
-        js = load_clusters(force=False) or {}
+        # wrap sync call
+        js = await asyncio.to_thread(load_clusters, force=False) or {}
         name_by_wid: Dict[int, str] = {}
         for cl in js.get("clusters") or []:
             cname = (
@@ -1373,7 +1397,7 @@ def get_lead_stats_by_cluster(
         name_by_wid = {}
 
     if not name_by_wid:
-        _save_stats_cache(key, [])
+        await _save_stats_cache(key, [])
         return []
 
     aggr2 = _aggregate_stats(
@@ -1388,30 +1412,30 @@ def get_lead_stats_by_cluster(
     out2.sort(
         key=lambda t: (-int(t[2].get("n", 0)), -float(t[2].get("avg", 0.0)), str(t[1]).lower())
     )
-    _save_stats_cache(key, out2)
+    await _save_stats_cache(key, out2)
     return out2
 
 
-def get_lead_stats_by_sku(
+async def get_lead_stats_by_sku(
     period_days: int | None = None,
 ) -> List[Tuple[int, str, Dict[str, float]]]:
     """
     Возвращает список по SKU с фильтром/порядком по WATCH_SKU (если задан).
     Если WATCH_SKU задан, но не дал попаданий — используем фолбэк к фактическим данным.
     """
-    period = int(period_days or get_stat_period())
-    key = _stats_key(period, "sku")
-    cache_all = _load_stats_cache()
+    period = int(period_days or await get_stat_period())
+    key = await _stats_key(period, "sku")
+    cache_all = await _load_stats_cache()
     cache = cache_all.get(key) or {}
     stats_saved = str(cache.get("saved_at") or "")
-    events_saved = _events_saved_at()
+    events_saved = await _events_saved_at()
     if cache and _is_fresh(stats_saved, LEAD_STAT_TTL_HOURS) and _iso_ge(stats_saved,                                                                             events_saved):
         return cache.get("payload", [])
-    _ensure_recent_events(period, max_pages=2)
-    events = _only_completed_with_duration(_materialize_events(period))
+    await _ensure_recent_events(period, max_pages=2)
+    events = _only_completed_with_duration(await _materialize_events(period))
     events = [e for e in events if int(e.get("sku") or 0) > 0]
     if not events:
-        _save_stats_cache(key, [])
+        await _save_stats_cache(key, [])
         return []
     try:
         from modules_sales.sales_facts_store import get_alias_for_sku  # type: ignore
@@ -1434,12 +1458,13 @@ def get_lead_stats_by_sku(
             m = aggr_map.get(int(sku))
             if not m:
                 continue
-            alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+            # wrap sync call if needed, assuming get_alias_for_sku reads memory or file
+            alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
             out.append((int(sku), alias, m))
         if not out:
             tmp: List[Tuple[int, str, Dict[str, float]]] = []
             for sku, m in aggr:
-                alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+                alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
                 tmp.append((int(sku), alias, m))
             tmp.sort(
                 key=lambda t: (-int(t[2].get("n", 0)), -float(t[2].get("avg", 0.0)), t[1].lower())
@@ -1448,24 +1473,24 @@ def get_lead_stats_by_sku(
     else:
         tmp: List[Tuple[int, str, Dict[str, float]]] = []
         for sku, m in aggr:
-            alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+            alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
             tmp.append((int(sku), alias, m))
         tmp.sort(key=lambda t: (-int(t[2].get("n", 0)), -float(t[2].get("avg", 0.0)), t[1].lower()))
         out = tmp
 
-    _save_stats_cache(key, out)
+    await _save_stats_cache(key, out)
     return out
 
 
 # ── drill-down helpers ───────────────────────────────────────────────────────
 
 
-def get_lead_stats_sku_for_warehouse(
+async def get_lead_stats_sku_for_warehouse(
     warehouse_id: int, period_days: int | None = None
 ) -> List[Tuple[int, str, Dict[str, float]]]:
-    period = int(period_days or get_stat_period())
-    _ensure_recent_events(period, max_pages=2)
-    events = _only_completed_with_duration(_materialize_events(period))
+    period = int(period_days or await get_stat_period())
+    await _ensure_recent_events(period, max_pages=2)
+    events = _only_completed_with_duration(await _materialize_events(period))
     ev = [
         e
         for e in events
@@ -1494,12 +1519,12 @@ def get_lead_stats_sku_for_warehouse(
         for sku in WATCH_ORDER:
             m = aggr_map.get(int(sku))
             if m:
-                alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+                alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
                 out.append((int(sku), alias, m))
         if not out:
             tmp: List[Tuple[int, str, Dict[str, float]]] = []
             for sku, m in aggr:
-                alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+                alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
                 tmp.append((int(sku), alias, m))
             tmp.sort(
                 key=lambda t: (-int(t[2].get("n", 0)), -float(t[2].get("avg", 0.0)), t[1].lower())
@@ -1508,7 +1533,7 @@ def get_lead_stats_sku_for_warehouse(
     else:
         tmp: List[Tuple[int, str, Dict[str, float]]] = []
         for sku, m in aggr:
-            alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+            alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
             tmp.append((int(sku), alias, m))
         tmp.sort(key=lambda t: (-int(t[2].get("n", 0)), -float(t[2].get("avg", 0.0)), t[1].lower()))
         out = tmp
@@ -1516,12 +1541,12 @@ def get_lead_stats_sku_for_warehouse(
     return out
 
 
-def get_lead_stats_sku_for_cluster(
+async def get_lead_stats_sku_for_cluster(
     cluster_id: int, period_days: int | None = None
 ) -> List[Tuple[int, str, Dict[str, float]]]:
-    period = int(period_days or get_stat_period())
-    _ensure_recent_events(period, max_pages=2)
-    events = _only_completed_with_duration(_materialize_events(period))
+    period = int(period_days or await get_stat_period())
+    await _ensure_recent_events(period, max_pages=2)
+    events = _only_completed_with_duration(await _materialize_events(period))
     ev = [
         e
         for e in events
@@ -1550,12 +1575,12 @@ def get_lead_stats_sku_for_cluster(
         for sku in WATCH_ORDER:
             m = aggr_map.get(int(sku))
             if m:
-                alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+                alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
                 out.append((int(sku), alias, m))
         if not out:
             tmp: List[Tuple[int, str, Dict[str, float]]] = []
             for sku, m in aggr:
-                alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+                alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
                 tmp.append((int(sku), alias, m))
             tmp.sort(
                 key=lambda t: (-int(t[2].get("n", 0)), -float(t[2].get("avg", 0.0)), t[1].lower())
@@ -1564,7 +1589,7 @@ def get_lead_stats_sku_for_cluster(
     else:
         tmp: List[Tuple[int, str, Dict[str, float]]] = []
         for sku, m in aggr:
-            alias = (get_alias_for_sku(int(sku)) or "").strip() or str(sku)
+            alias = (await asyncio.to_thread(get_alias_for_sku, int(sku)) or "").strip() or str(sku)
             tmp.append((int(sku), alias, m))
         tmp.sort(key=lambda t: (-int(t[2].get("n", 0)), -float(t[2].get("avg", 0.0)), t[1].lower()))
         out = tmp
@@ -1575,9 +1600,9 @@ def get_lead_stats_sku_for_cluster(
 # ── helpers for manual leads sync ────────────────────────────────────────────
 
 
-def get_stats_avg_by_warehouse(period_days: int) -> Dict[int, float]:
+async def get_stats_avg_by_warehouse(period_days: int) -> Dict[int, float]:
     out: Dict[int, float] = {}
-    for wid, _name, metrics in get_lead_stats_by_warehouse(period_days):
+    for wid, _name, metrics in await get_lead_stats_by_warehouse(period_days):
         try:
             out[int(wid)] = float(metrics.get("avg", 0.0) or 0.0)
         except Exception:
@@ -1585,13 +1610,14 @@ def get_stats_avg_by_warehouse(period_days: int) -> Dict[int, float]:
     return out
 
 
-def apply_stats_to_leads_for_followers() -> int:
+async def apply_stats_to_leads_for_followers() -> int:
     try:
         from modules_shipments.shipments_leadtime_data import get_following_wids, set_lead_for_wid  # type: ignore
     except Exception:
         return 0
 
-    followers = get_following_wids() or {}
+    # get_following_wids is sync (reads json)
+    followers = await asyncio.to_thread(get_following_wids) or {}
     if not followers:
         return 0
 
@@ -1599,7 +1625,7 @@ def apply_stats_to_leads_for_followers() -> int:
     period_maps: Dict[int, Dict[int, float]] = {}
     for p in periods:
         try:
-            period_maps[p] = get_stats_avg_by_warehouse(int(p))
+            period_maps[p] = await get_stats_avg_by_warehouse(int(p))
         except Exception:
             period_maps[p] = {}
 
@@ -1613,7 +1639,8 @@ def apply_stats_to_leads_for_followers() -> int:
             avg = float(period_maps.get(p, {}).get(int(wid)) or 0.0)
             if avg <= 0:
                 continue
-            set_lead_for_wid(int(wid), round(avg, 2), updated_by=f"stats_sync:P{p}")
+            # set_lead_for_wid is sync
+            await asyncio.to_thread(set_lead_for_wid, int(wid), round(avg, 2), updated_by=f"stats_sync:P{p}")
             updated += 1
         except Exception:
             continue
@@ -1623,7 +1650,7 @@ def apply_stats_to_leads_for_followers() -> int:
 # 🆕 ── авто‑включение подписки для складов, замеченных в статистике ──────────
 
 
-def _auto_enable_follow_for_seen_wids() -> int:
+def _auto_enable_follow_for_seen_wids_sync() -> int:
     try:
         from modules_shipments.shipments_leadtime_data import get_following_wids, enable_follow_stats  # type: ignore
     except Exception:
@@ -1633,7 +1660,8 @@ def _auto_enable_follow_for_seen_wids() -> int:
     except Exception:
         existing = set()
 
-    js = _read_json(EVENTS_CACHE_PATH)
+    # Use sync reading here since we are in to_thread wrapper
+    js = _read_json_sync(EVENTS_CACHE_PATH)
     rows = js.get("rows", []) if isinstance(js, dict) else []
     seen: set[int] = set()
     for e in rows:
@@ -1650,7 +1678,10 @@ def _auto_enable_follow_for_seen_wids() -> int:
     if not todo:
         return 0
 
-    period = get_stat_period() or LEAD_STAT_DAYS_DEFAULT
+    # Load prefs sync
+    d = _read_json_sync(LEAD_STATS_PREFS_PATH)
+    period = int(d.get("period", LEAD_STAT_DAYS_DEFAULT))
+
     enabled = 0
     for w in todo:
         try:
@@ -1660,8 +1691,11 @@ def _auto_enable_follow_for_seen_wids() -> int:
             continue
     return enabled
 
+async def _auto_enable_follow_for_seen_wids() -> int:
+    return await asyncio.to_thread(_auto_enable_follow_for_seen_wids_sync)
 
-def update_leadtime_events(
+
+async def update_leadtime_events(
     days: int = LEAD_STAT_DAYS_DEFAULT,
     source: str = "all",
     pages: int = 1,
@@ -1672,8 +1706,8 @@ def update_leadtime_events(
         print("[leadtime] requests or API keys missing; skip ingest")
         return 0
 
-    _retain_events()
-    _retain_states()
+    await _retain_events()
+    await _retain_states()
 
     from_id = 0
     pages_limit = max(1, min(int(pages), int(LEAD_MAX_PAGES)))
@@ -1688,7 +1722,7 @@ def update_leadtime_events(
     ]
 
     while page_cnt < pages_limit:
-        ids, nxt = _supply_list(
+        ids, nxt = await _supply_list(
             states=STATES, from_id=from_id, limit=min(int(LEAD_FETCH_BATCH), 100)
         )
         if not ids:
@@ -1699,48 +1733,48 @@ def update_leadtime_events(
 
         for i in range(0, len(ids), max(1, int(LEAD_GET_BATCH))):
             batch_ids = ids[i : i + max(1, int(LEAD_GET_BATCH))]
-            orders = _supply_get(batch_ids)
+            orders = await _supply_get(batch_ids)
             if orders:
                 try:
-                    _states_upsert_from_get(orders, now_iso=_utc_now_iso())
+                    await _states_upsert_from_get(orders, now_iso=_utc_now_iso())
                 except Exception as ex:
                     print("[leadtime] states_upsert error:", ex)
-            time.sleep(0.06)
+            await asyncio.sleep(0.06)
 
         # защита от стагнации пагинации (если сервер не принимает from_* параметр)
         if not nxt or int(nxt) <= int(from_id):
             break
         from_id = nxt
-        time.sleep(0.08)
+        await asyncio.sleep(0.08)
 
     try:
-        _purge_completed_without_start()
+        await _purge_completed_without_start()
     except Exception:
         pass
 
     added = 0
     try:
-        added = _emit_phase_b_events_from_states(_utc_now_iso())
+        added = await _emit_phase_b_events_from_states(_utc_now_iso())
     except Exception as ex:
         print("[leadtime] emit phase-B events failed:", ex)
         added = 0
 
     if added > 0:
         try:
-            _write_json(STATS_CACHE_PATH, {})
+            await _write_json(STATS_CACHE_PATH, {})
         except Exception:
             pass
 
     # 🆕 авто‑включим подписку для всех появившихся складов и сразу подтянем значения
     try:
-        newly_enabled = _auto_enable_follow_for_seen_wids()
+        newly_enabled = await _auto_enable_follow_for_seen_wids()
         if newly_enabled:
             print(f"[leadtime] auto-follow enabled for {newly_enabled} warehouses")
     except Exception as ex:
         print("[leadtime] auto-follow failed:", ex)
 
     try:
-        synced = apply_stats_to_leads_for_followers()
+        synced = await apply_stats_to_leads_for_followers()
         if synced:
             print(f"[leadtime] stats_sync: updated manual leads for {synced} followers")
     except Exception as ex:
@@ -1750,32 +1784,32 @@ def update_leadtime_events(
     return int(added or 0)
 
 
-def ingest_tick(pages: Optional[int] = None, days: Optional[int] = None) -> int:
-    st = _read_state()
+async def ingest_tick(pages: Optional[int] = None, days: Optional[int] = None) -> int:
+    st = await _read_state()
     now = dt.datetime.now().timestamp()
 
-    primary_bootstrap = _is_events_empty()
+    primary_bootstrap = await _is_events_empty()
 
     if not _should_force_tick(now, st, primary_bootstrap):
         if now < float(st.get("next_allowed_ts") or 0.0) or st.get("is_running"):
             return 0
 
     st["is_running"] = True
-    _write_state(st)
+    await _write_state(st)
     try:
-        period_days = int(days or get_stat_period() or LEAD_STAT_DAYS_DEFAULT)
+        period_days = int(days or await get_stat_period() or LEAD_STAT_DAYS_DEFAULT)
 
         page_depth = int(pages if pages is not None else LEAD_INGEST_PAGES_DEFAULT)
         if primary_bootstrap:
             page_depth = max(page_depth, int(os.getenv("LEAD_PRIMARY_PAGES", LEAD_PRIMARY_PAGES)))
         page_depth = max(1, min(page_depth, int(os.getenv("LEAD_MAX_PAGES", "50"))))
 
-        added = update_leadtime_events(
+        added = await update_leadtime_events(
             days=period_days, pages=page_depth, primary_bootstrap=primary_bootstrap
         )
 
         try:
-            _write_json(STATS_CACHE_PATH, {})
+            await _write_json(STATS_CACHE_PATH, {})
         except Exception:
             pass
 
@@ -1788,7 +1822,7 @@ def ingest_tick(pages: Optional[int] = None, days: Optional[int] = None) -> int:
                 "is_running": False,
             }
         )
-        _write_state(st)
+        await _write_state(st)
         return int(added or 0)
     except Exception:
         st.update(
@@ -1800,35 +1834,35 @@ def ingest_tick(pages: Optional[int] = None, days: Optional[int] = None) -> int:
                 "is_running": False,
             }
         )
-        _write_state(st)
+        await _write_state(st)
         return 0
 
 
 # ── maintenance (public) ─────────────────────────────────────────────────────
 
 
-def invalidate_stats_cache() -> None:
+async def invalidate_stats_cache() -> None:
     try:
-        _write_json(STATS_CACHE_PATH, {})
+        await _write_json(STATS_CACHE_PATH, {})
     except Exception:
         pass
 
 
-def rebuild_events_from_states() -> int:
+async def rebuild_events_from_states() -> int:
     try:
-        _write_json(EVENTS_CACHE_PATH, {"saved_at": _utc_now_iso(), "rows": [], "version": 2})
-        added = _emit_phase_b_events_from_states(_utc_now_iso())
-        _write_json(STATS_CACHE_PATH, {})
+        await _write_json(EVENTS_CACHE_PATH, {"saved_at": _utc_now_iso(), "rows": [], "version": 2})
+        added = await _emit_phase_b_events_from_states(_utc_now_iso())
+        await _write_json(STATS_CACHE_PATH, {})
         # 🆕 сразу включим follow для замеченных складов и подтянем значения
         try:
-            newly_enabled = _auto_enable_follow_for_seen_wids()
+            newly_enabled = await _auto_enable_follow_for_seen_wids()
             if newly_enabled:
                 print(f"[leadtime] auto-follow enabled for {newly_enabled} warehouses (rebuild)")
         except Exception as ex:
             print("[leadtime] auto-follow failed (rebuild):", ex)
 
         try:
-            synced = apply_stats_to_leads_for_followers()
+            synced = await apply_stats_to_leads_for_followers()
             if synced:
                 print(f"[leadtime] stats_sync: updated manual leads for {synced} followers")
         except Exception as ex:
@@ -1838,16 +1872,20 @@ def rebuild_events_from_states() -> int:
         return 0
 
 
-def ingest_status() -> dict:
-    st = _read_state()
-    cache_ev = _read_json(EVENTS_CACHE_PATH)
+def ingest_status_sync() -> dict:
+    st = _read_json_sync(LEAD_INGEST_STATE_PATH)
+    cache_ev = _read_json_sync(EVENTS_CACHE_PATH)
+
+    if not isinstance(st, dict): st = {}
+    if not isinstance(cache_ev, dict): cache_ev = {}
+
     rows = cache_ev.get("rows") or []
     total = len(rows)
     base_rows = sum(1 for e in rows if (e.get("sku") is None or int(e.get("sku") or 0) == 0))
     sku_rows = max(0, total - base_rows)
 
     last_run_at = str(st.get("last_run_at") or "")
-    events_saved_at = _events_saved_at() or ""
+    events_saved_at = str(cache_ev.get("saved_at") or "")
 
     def _to_ts(s: str) -> float:
         d = _parse_iso_dt(s)
@@ -1857,17 +1895,18 @@ def ingest_status() -> dict:
     if _to_ts(events_saved_at) > _to_ts(last_run_at):
         last_activity_iso = events_saved_at
 
-    st_cache = _states_load()
+    st_cache = _read_json_sync(STATES_CACHE_PATH)
     tracked = 0
     completed = 0
-    for _, rec in st_cache.items():
-        states = rec.get("states") or {}
-        has_a = START_STATE in states
-        has_c = _has_end_state(states)
-        if has_a:
-            tracked += 1
-        if has_a and has_c:
-            completed += 1
+    if isinstance(st_cache, dict):
+        for _, rec in st_cache.items():
+            states = rec.get("states") or {}
+            has_a = START_STATE in states
+            has_c = _has_end_state(states)
+            if has_a:
+                tracked += 1
+            if has_a and has_c:
+                completed += 1
 
     return {
         "last_run_at": last_activity_iso,
@@ -1883,6 +1922,9 @@ def ingest_status() -> dict:
         "events_path": EVENTS_CACHE_PATH,
         "states_path": STATES_CACHE_PATH,
     }
+
+async def ingest_status() -> dict:
+    return await asyncio.to_thread(ingest_status_sync)
 
 
 __all__ = [
